@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Platform theme: no AppCompat needed. Black window = no white flash on launch.
+         Not a "Fullscreen" theme: MainActivity shows the system bars in phone
+         portrait and hides them in landscape / on TV (applySystemBars). -->
+    <style name="Theme.MZIPTV" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@android:color/black</item>
+        <item name="android:statusBarColor">@android:color/black</item>
+        <item name="android:navigationBarColor">@android:color/black</item>
+        <!-- App accent (text cursor, selection handles) = the page's blue -->
+        <item name="android:colorAccent">#6AA5FB</item>
+    </style>
+</resources>

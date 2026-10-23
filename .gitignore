@@ -1,0 +1,17 @@
+# Test output (screenshots, logs, Chrome profiles, downloaded playlist)
+tests/out/
+
+# Icon generator temp files
+art/build-*
+
+# Editors / OS
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# Release signing — never commit keys or their passwords
+android/keystore.properties
+*.jks
+*.keystore

@@ -1,0 +1,6 @@
+# Keep LF everywhere (gradlew must stay LF to run on macOS/Linux)…
+* text=auto eol=lf
+# …except Windows batch files.
+*.bat text eol=crlf
+# Third-party files stay byte-identical to the verified npm releases.
+web/vendor/** -text

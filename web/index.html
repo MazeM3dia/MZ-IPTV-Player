@@ -1,0 +1,2019 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>MZ IPTV Player</title>
+<!-- Tab + home-screen icons: generated from art/icon.jpg by art/make-icons.py -->
+<link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png">
+<link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<script>
+  // Decide the host before first paint. Inside the Android TV app the native
+  // layer injects `MZNative` and draws the video UNDER this (transparent) page.
+  document.documentElement.className = window.MZNative ? "is-native" : "is-web";
+</script>
+
+<!-- Inter Variable 5.1.0 (weights 100–900 in one file), bundled in vendor/
+     — the page loads nothing from CDNs; only playlists, streams and logos
+     come from the network. -->
+<style>
+@font-face {
+  font-family: 'Inter Variable';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 900;
+  src: url(vendor/inter-latin-wght-normal.woff2) format('woff2-variations');
+  unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;
+}
+</style>
+
+<style>
+  /* =====================================================================
+     DESIGN TOKENS — shadcn zinc dark palette + blue primary (from the app icon).
+     Plain hex / rgba (exact conversions of the OKLCH design values): oklch()
+     needs WebView 111+, and many TV boxes ship far older WebViews
+       --background / --foreground        base page surface + text
+       --card / --muted                   raised / de-emphasised surfaces
+       --muted-foreground                 secondary text (zinc-400: ≥7:1)
+       --border / --input                 outlines, form fields
+       --primary / --primary-foreground   blue accent (focus, buttons). WCAG 2.2 contrast:
+                                          8.0:1 on --background, 7.1:1 on --card,
+                                          6.0:1 on --muted (focused rows, keys);
+                                          dark text on a blue button 8.0:1
+       --ring                             focus ring glow
+     TV (10-foot UI) tokens:
+       --safe-x / --safe-y   overscan-safe margin (Android TV: ~5%)
+       --strip-w             channel strip + filter panel width
+       --row-h               channel row height — JS writes the exact px
+                             value it uses for list virtualization
+     Sizing: everything is in rem. The root font follows the screen's
+     SHORT side (height, or width×9/16 when portrait), so a 1080p TV
+     (960×540 CSS px in the WebView) gets 18px and a phone gets 15px.
+     Layouts: landscape = side strip over fullscreen video (TV, desktop,
+     phone sideways); portrait = video on top, channel list below.
+  ===================================================================== */
+  :root {
+    --background:        #09090b;   /* zinc-950 */
+    --foreground:        #f9fafb;   /* zinc-50  */
+    --card:              #18181b;   /* zinc-900 */
+    --muted:             #27272a;   /* zinc-800 */
+    --muted-foreground:  #9f9fa9;   /* zinc-400 */
+    --border:            #3f3f46;   /* zinc-700 — zinc-800 vanishes on TV panels */
+    --input:             #18181b;
+    --ring:              rgba(107, 165, 251, 0.3);
+    --primary:           #6ba5fb;        /* icon blue, lightened for dark UI */
+    --primary-line:      rgba(107, 165, 251, 0.45); /* quality badge outline */
+    --primary-halo:      rgba(107, 165, 251, 0.15); /* number-entry glow */
+    --primary-foreground:#09090b;
+    --danger:            #ff6467;    /* red-400 */
+    --panel:             rgba(9, 9, 11, 0.85);   /* list + filter over the video; ≥0.82 keeps grey text ≥4.5:1 even on a white frame */
+
+    --radius:            0.625rem;
+    --radius-sm:         calc(var(--radius) * 0.6);
+    --radius-md:         calc(var(--radius) * 0.8);
+    --radius-lg:         var(--radius);
+    --radius-xl:         calc(var(--radius) * 1.4);
+    --radius-2xl:        calc(var(--radius) * 2.2);
+
+    --safe-x:            max(5vw, env(safe-area-inset-left), env(safe-area-inset-right));   /* + phone notch */
+    --safe-y:            max(5vh, env(safe-area-inset-top), env(safe-area-inset-bottom));
+    --strip-w:           calc(var(--safe-x) + min(24rem, 46vw));
+    --row-h:             3.2rem;
+  }
+
+  /* ---- Reset ---- */
+  *, *::before, *::after { box-sizing:border-box; }
+  html { font-size: clamp(15px, calc(min(100vh, 56.25vw) / 30), 28px); }   /* 540p→18px · 720p→24px · ≥840p→28px */
+  html { touch-action:manipulation; -webkit-tap-highlight-color:transparent; }
+  html, body {
+    margin:0; height:100%;
+    background:var(--background); color:var(--foreground); overflow:hidden;
+    font-family:'Inter Variable', system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+    line-height:1.5; -webkit-font-smoothing:antialiased;
+  }
+  body { font-size:1rem; }
+  html.is-native, html.is-native body { background:transparent; }   /* ExoPlayer shows through */
+  .is-native .web-only, .is-web .tv-only { display:none !important; }
+  /* App: <video> stays in the layout, invisible — its box tells ExoPlayer where to draw.
+     The tap layer + control bar are for touch screens only (phone / tablet app). */
+  .is-native #video { visibility:hidden; }
+  html.is-native:not(.touch) .pointer-ui { display:none !important; }
+  [hidden] { display:none !important; }
+
+  .ic { width:1em; height:1em; flex-shrink:0; fill:currentColor; vertical-align:-0.15em; }
+  kbd {
+    font-family:ui-monospace, Menlo, Consolas, monospace;
+    background:var(--muted); border:1px solid var(--border);
+    border-radius:var(--radius-sm); padding:0 .4em;
+    font-size:.85em; color:var(--primary); font-weight:600; white-space:nowrap;
+  }
+  .dot { display:inline-block; width:.75em; height:.75em; border-radius:50%; margin:0 .08em; vertical-align:-0.05em; }
+  .dot.red { background:#e53935; } .dot.green { background:#43a047; }
+  .dot.yellow { background:#fdd835; } .dot.blue { background:#1e88e5; }
+
+  /* ---- Fullscreen video (browser; the app draws ExoPlayer here) + the tap/swipe layer over it ---- */
+  #video { position:fixed; top:0; right:0; bottom:0; left:0; width:100%; height:100%; object-fit:contain; background:#000; z-index:0; }
+  #tap { position:fixed; top:0; right:0; bottom:0; left:0; z-index:1; touch-action:none; }
+  .channel, .ritem, .mitem, .fitem, #controls, #tap { -webkit-user-select:none; user-select:none; -webkit-touch-callout:none; }
+
+  /* ---- Channel strip ---- */
+  #strip {
+    position:fixed; top:0; left:0; height:100%; width:var(--strip-w); z-index:10;
+    background:var(--panel); border-right:1px solid var(--border);
+    display:flex; flex-direction:column; gap:.6rem;
+    padding:var(--safe-y) .9rem var(--safe-y) var(--safe-x);
+    transform:translateX(-100%); transition:transform .25s cubic-bezier(.4,0,.2,1);
+  }
+  #strip.open { transform:translateX(0); }
+
+  .brand {
+    display:flex; align-items:center; gap:.4rem;
+    color:var(--primary); text-transform:uppercase; letter-spacing:.1em;
+    font-size:.8rem; font-weight:700; white-space:nowrap;
+  }
+  /* The logo needs ~2em to read at this small text size; the negative margin keeps the row height. */
+  .brand .logo { font-size:2em; margin:-.25em 0; }
+  .head { display:flex; gap:.4rem; align-items:center; }
+  #urlform { flex:1; min-width:0; display:flex; margin:0; }
+  #url {
+    flex:1; min-width:0;
+    background:var(--input); border:2px solid var(--border); color:var(--foreground);
+    padding:.35rem .6rem; border-radius:var(--radius-md); font:inherit; font-size:.85rem;
+    outline:none; transition:border-color .15s, box-shadow .15s;
+  }
+  .hbtn {
+    display:inline-flex; align-items:center; gap:.35rem;
+    background:var(--muted); color:var(--foreground); border:2px solid var(--border);
+    padding:.35rem .7rem; border-radius:var(--radius-md);
+    font:inherit; font-size:.85rem; font-weight:600; white-space:nowrap; cursor:pointer;
+    transition:border-color .15s, opacity .15s;
+  }
+  .hbtn.primary { background:var(--primary); color:var(--primary-foreground); border-color:var(--primary); font-weight:700; }
+  .hbtn:hover { border-color:var(--primary); }
+  .hbtn:disabled { opacity:.5; cursor:default; }
+  /* Remote focus on the top bar (and keyboard focus in the URL field) */
+  #url:focus, .hf { border-color:var(--primary); outline:2px solid var(--primary); outline-offset:2px; box-shadow:0 0 0 5px var(--ring); }
+
+  .filterline { font-size:.8rem; color:var(--muted-foreground); min-height:1.2rem; }
+  .filterline b { color:var(--primary); }
+
+  /* ---- Virtualized channel list ---- */
+  #list { flex:1; overflow-y:auto; overflow-x:hidden; min-height:0; position:relative; scrollbar-width:none; }
+  #list::-webkit-scrollbar { display:none; }
+  #sizer { position:relative; width:100%; }
+
+  .channel {
+    position:absolute; left:0; right:0; height:var(--row-h);
+    display:flex; align-items:center; gap:.7rem; padding:0 .8rem;
+    border:2px solid transparent; border-radius:var(--radius-lg);
+    font-size:1.05rem; font-weight:600; cursor:pointer;
+    transition:background .12s ease, border-color .12s ease;
+  }
+  .channel .num {
+    font-family:ui-monospace, Menlo, Consolas, monospace;
+    color:var(--muted-foreground); font-size:.8rem; min-width:2.6rem;
+    text-align:right; flex-shrink:0; font-weight:400;
+  }
+  .logo { width:2rem; height:2rem; object-fit:contain; background:#000; border-radius:var(--radius-sm); flex-shrink:0; }
+  span.logo { visibility:hidden; }
+  .channel .txt { flex:1; min-width:0; display:flex; flex-direction:column; justify-content:center; line-height:1.25; }
+  .channel .nm { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; }
+  /* Quiet second line: country · quality · flags · genre */
+  .channel .meta, #banner .bn2 {
+    display:flex; align-items:center; gap:.35rem; min-width:0;
+    font-size:.75rem; font-weight:500; color:var(--muted-foreground); white-space:nowrap; overflow:hidden;
+  }
+  .meta .g { overflow:hidden; text-overflow:ellipsis; min-width:0; }
+  .badge {
+    flex-shrink:0; padding:0 .35em; border-radius:var(--radius-sm); border:1px solid var(--border);
+    font-size:.72rem; font-weight:700; letter-spacing:.04em; line-height:1.45; color:var(--muted-foreground);
+  }
+  .badge.cc { background:var(--border); border-color:transparent; color:var(--foreground); font-family:ui-monospace, Menlo, Consolas, monospace; }
+  .badge.q { color:var(--primary); border-color:var(--primary-line); }
+  .badge.warn { color:var(--danger); border-color:rgba(255, 100, 103, 0.45); }
+  .channel .favic { display:none; color:var(--primary); margin-right:.3em; }
+  .channel.fav .favic { display:inline-block; }
+  /* Playing indicator sits outside the name so truncation never hides it */
+  .channel .playind { color:var(--primary); opacity:0; }
+  .channel.playing .playind { opacity:1; }
+
+  /* TV focus ring — the most important visual in the whole app */
+  .channel.focused {
+    background:var(--muted); border-color:var(--primary);
+    box-shadow:0 0 0 3px var(--ring), 0 6px 24px rgba(0, 0, 0, 0.5);
+  }
+  .channel.focused .num, .channel.playing .num { color:var(--primary); }
+  #strip.zone-head .channel.focused { border-color:transparent; box-shadow:none; background:rgba(39, 39, 42, 0.5); }
+
+  #empty {
+    position:absolute; top:0; right:0; bottom:0; left:0; display:flex; flex-direction:column;
+    align-items:center; justify-content:center; gap:.4rem; padding:1rem;
+    text-align:center; color:var(--muted-foreground); font-size:.9rem;
+  }
+  #empty b { color:var(--foreground); font-size:1rem; }
+  .foot { font-size:.8rem; color:var(--muted-foreground); }
+
+  /* ---- Filter panel (covers the strip) ---- */
+  #filter {
+    position:fixed; top:0; left:0; height:100%; width:var(--strip-w); z-index:16;
+    background:var(--panel); border-right:1px solid var(--border);
+    padding:var(--safe-y) .9rem var(--safe-y) var(--safe-x);
+    display:none; flex-direction:column; gap:.3rem;
+  }
+  #filter.open { display:flex; }
+  /* The filter sits on top of the list and both are see-through: hide the list meanwhile */
+  .filter-open #strip { visibility:hidden; }
+  .fhead { display:flex; justify-content:space-between; align-items:center; gap:1rem; }
+  #filter h3 {
+    color:var(--primary); font-size:.8rem; text-transform:uppercase;
+    letter-spacing:.12em; font-weight:700; margin:0;
+  }
+  #fcount { color:var(--muted-foreground); font-size:.85rem; margin-bottom:.4rem; }
+  #fcount b { color:var(--foreground); font-weight:600; }
+  #fitems, #fpick {
+    flex:1; min-height:0; overflow-y:auto; scrollbar-width:none;
+    display:flex; flex-direction:column; gap:.15rem;
+  }
+  #fitems::-webkit-scrollbar, #fpick::-webkit-scrollbar { display:none; }
+
+  .fitem {
+    display:flex; justify-content:space-between; align-items:center; gap:.7rem;
+    padding:.6rem .8rem; border-radius:var(--radius-lg); flex-shrink:0;
+    border:2px solid transparent; font-size:1rem; font-weight:500; cursor:pointer;
+    transition:background .1s, border-color .1s;
+  }
+  .fitem .val {
+    color:var(--muted-foreground); font-family:ui-monospace, Menlo, Consolas, monospace;
+    font-size:.85rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:55%;
+  }
+  .fitem .pl { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .fitem.cycle .val::before { content:"‹ "; color:var(--primary); }
+  .fitem.cycle .val::after  { content:" ›"; color:var(--primary); }
+  .fitem.search { flex-direction:column; align-items:stretch; gap:.4rem; }
+  .fitem.focused, .pitem.focused {
+    background:var(--muted); border-color:var(--primary); box-shadow:0 0 0 3px var(--ring);
+  }
+  .fitem.focused .val { color:var(--primary); }
+  .pitem.current .pl::before { content:"● "; color:var(--primary); }
+
+  #fsearch {
+    width:100%; background:var(--input); border:2px solid var(--border);
+    color:var(--foreground); padding:.4rem .6rem; border-radius:var(--radius-md);
+    font:inherit; font-size:.95rem; outline:none; transition:border-color .15s, box-shadow .15s;
+  }
+  #fsearch:focus { border-color:var(--primary); box-shadow:0 0 0 3px var(--ring); }
+
+  /* ---- Now-playing banner ---- */
+  #banner {
+    position:fixed; left:var(--safe-x); bottom:var(--safe-y); z-index:12;
+    max-width:calc(100vw - 2 * var(--safe-x));
+    display:flex; align-items:center; gap:.7rem;
+    background:rgba(24, 24, 27, 0.95);
+    border:1px solid var(--border); border-radius:var(--radius-xl);
+    padding:.7rem 1.1rem; font-size:1.05rem; color:var(--muted-foreground);
+    opacity:0; transform:translateY(8px);
+    transition:opacity .25s ease, transform .25s ease, left .25s ease;
+    pointer-events:none; box-shadow:0 8px 32px rgba(0, 0, 0, 0.5);
+  }
+  .strip-open #banner { left:calc(var(--strip-w) + 1rem); max-width:calc(100vw - var(--strip-w) - 1rem - var(--safe-x)); }
+  #banner.show { opacity:1; transform:translateY(0); }
+  #banner b { color:var(--foreground); font-weight:700; }
+  #banner .ic { color:var(--primary); font-size:1.2em; }
+  #banner .logo { width:2.6rem; height:2.6rem; border-radius:var(--radius-md); }
+  #banner .bn { display:flex; flex-direction:column; gap:.2rem; min-width:0; }
+  #banner .bn1 { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  #banner .bn2 { font-size:.85rem; flex-wrap:wrap; white-space:normal; }
+
+  /* ---- Player status card (tuning / buffering / paused / error) ---- */
+  #status {
+    position:fixed; z-index:4; top:50%; left:50%; transform:translate(-50%, -50%);
+    display:none; flex-direction:column; align-items:center; gap:.5rem;
+    width:max-content; max-width:min(30rem, 80vw);
+    padding:1.2rem 1.6rem; text-align:center;
+    background:rgba(24, 24, 27, 0.92); border:1px solid var(--border);
+    border-radius:var(--radius-xl); box-shadow:0 8px 32px rgba(0, 0, 0, 0.5);
+    font-size:1rem; color:var(--muted-foreground); transition:left .25s ease;
+  }
+  .strip-open #status { left:calc(var(--strip-w) + (100vw - var(--strip-w)) / 2); max-width:min(30rem, calc(100vw - var(--strip-w) - 2rem)); }
+  #status.busy, #status.paused, #status.error { display:flex; }
+  #status.busy { animation:fade-in .2s .35s both; }   /* no flicker on fast tunes */
+  #status b { color:var(--foreground); font-size:1.1rem; }
+  #status small { font-size:.85rem; }
+  #status > .ic { width:2.2rem; height:2.2rem; color:var(--primary); }
+  #status.error > .ic { color:var(--danger); }
+  .spin {
+    width:2.2rem; height:2.2rem; border-radius:50%;
+    border:3px solid var(--muted); border-top-color:var(--primary);
+    animation:spin .8s linear infinite;
+  }
+  .spin.sm { display:inline-block; width:1em; height:1em; border-width:2px; vertical-align:-0.15em; margin-right:.3em; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  @keyframes fade-in { from { opacity:0; } }
+
+  /* ---- Number-entry overlay ---- */
+  #numpad {
+    position:fixed; top:var(--safe-y); left:50%; transform:translateX(-50%) scale(.92); z-index:20;
+    background:rgba(24, 24, 27, 0.96);
+    border:2px solid var(--primary); border-radius:var(--radius-xl);
+    padding:.6rem 1.4rem; font-size:2.6rem; font-weight:800; letter-spacing:.1em;
+    font-family:ui-monospace, Menlo, Consolas, monospace; color:var(--primary);
+    opacity:0; pointer-events:none;
+    transition:opacity .15s ease, transform .15s ease;
+    box-shadow:0 0 0 4px var(--primary-halo);
+  }
+  #numpad.show { opacity:1; transform:translateX(-50%) scale(1); }
+
+  /* ---- Clock + controls hint (top-right, auto-hide) ---- */
+  #clock {
+    position:fixed; right:var(--safe-x); top:var(--safe-y); z-index:6;
+    font-size:1.05rem; font-weight:600; color:var(--foreground);
+    font-variant-numeric:tabular-nums; letter-spacing:.02em;
+    background:var(--panel); border-radius:var(--radius-md);   /* readable on any video frame */
+    padding:.1rem .6rem; transition:opacity .5s ease;
+  }
+  #clock .day { color:var(--muted-foreground); font-weight:500; }
+  #hint {
+    position:fixed; right:var(--safe-x); top:calc(var(--safe-y) + 2.4rem); z-index:5;
+    max-width:min(26rem, 60vw); text-align:right; line-height:1.7;
+    font-size:.8rem; color:var(--muted-foreground);
+    background:var(--panel); border-radius:var(--radius-md);
+    padding:.3rem .6rem; transition:opacity .5s ease;
+  }
+  #clock, #hint { pointer-events:none; }
+  body.chrome-hidden #clock, body.chrome-hidden #hint { opacity:0; }
+
+  /* ---- Pointer controls (browser only; TV uses the remote): shown on a tap
+     or mouse move, fade after a few seconds, stay while paused ---- */
+  #controls {
+    position:fixed; z-index:13; bottom:var(--safe-y); left:50%; transform:translateX(-50%);
+    display:flex; gap:.35rem; align-items:center; padding:.35rem;
+    background:rgba(24, 24, 27, 0.92); border:1px solid var(--border);
+    border-radius:999px; box-shadow:0 8px 32px rgba(0, 0, 0, 0.5);
+    opacity:0; pointer-events:none; transition:opacity .2s ease, left .25s ease;
+  }
+  .strip-open #controls { left:calc(var(--strip-w) + (100vw - var(--strip-w)) / 2); }
+  .controls-on #controls { opacity:1; pointer-events:auto; }
+  .controls-on #banner { bottom:calc(var(--safe-y) + 3.8rem); }
+  .cbtn, .mclose {
+    display:inline-flex; align-items:center; justify-content:center;
+    width:2.9rem; height:2.9rem; border-radius:50%; border:0; padding:0;
+    background:transparent; color:var(--foreground); font-size:1.25rem; cursor:pointer;
+  }
+  .cbtn:hover, .mclose:hover { background:var(--muted); }
+  .cbtn.big { background:var(--primary); color:var(--primary-foreground); }
+  .cbtn.big:hover { background:var(--primary); opacity:.9; }
+  .mclose { width:2.5rem; height:2.5rem; font-size:1.1rem; color:var(--muted-foreground); flex-shrink:0; }
+  html.is-native:not(.touch) .mclose { display:none; }
+
+  /* Buttons inside the status card / empty list (browser only). The card
+     itself lets taps and swipes through to the video; only buttons catch them. */
+  #status { pointer-events:none; }
+  .sbtns { display:flex; gap:.5rem; flex-wrap:wrap; justify-content:center; margin-top:.2rem; pointer-events:auto; }
+  #status .sbtns .ic, #empty .ic { width:1em; height:1em; color:inherit; }
+
+  /* ---- Modal cards: welcome, recently watched, options menu ---- */
+  .modal {
+    position:fixed; top:0; right:0; bottom:0; left:0; z-index:25; display:none;
+    align-items:center; justify-content:center;
+    background:rgba(0, 0, 0, 0.7);
+  }
+  .modal.open { display:flex; }
+  .modal .card {
+    background:var(--card); border:1px solid var(--border);
+    border-radius:var(--radius-2xl); box-shadow:0 24px 64px rgba(0, 0, 0, 0.65);
+    max-height:calc(100vh - 2 * var(--safe-y)); display:flex; flex-direction:column;
+  }
+  .mhead {
+    display:flex; justify-content:space-between; align-items:baseline; gap:1rem;
+    padding:0 1.2rem .8rem; border-bottom:1px solid var(--border); flex-shrink:0;
+  }
+  .mhead h3 {
+    margin:0; font-size:.8rem; font-weight:700; text-transform:uppercase;
+    letter-spacing:.1em; color:var(--primary);
+    overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  }
+  .mhead span { font-size:.8rem; color:var(--muted-foreground); white-space:nowrap; }
+  .mlist { overflow-y:auto; flex:1; padding:.4rem .6rem; scrollbar-width:none; }
+  .mlist::-webkit-scrollbar { display:none; }
+
+  #welcome { z-index:30; }
+  #welcome .card { width:min(42rem, 92vw); padding:1.3rem 1.7rem; overflow-y:auto; position:relative; isolation:isolate; }
+  /* Faint tilted logo behind the card's bottom-right corner, clipped by the card edge */
+  #welcome .wmark { position:absolute; top:0; right:0; bottom:0; left:0; overflow:hidden; pointer-events:none; z-index:-1; border-radius:inherit; }
+  #welcome .wmark svg {
+    position:absolute; right:-3.5rem; bottom:-4rem; width:19rem; height:19rem;
+    color:var(--primary); opacity:.08; transform:rotate(-14deg);
+  }
+  #welcome h2 { margin:0 0 .6rem; font-size:1.35rem; font-weight:800; letter-spacing:-.01em; }
+  #welcome h2 span { color:var(--primary); }
+  #welcome p { margin:0 0 .8rem; font-size:.9rem; line-height:1.55; }
+  #welcome p.legal { font-size:.8rem; color:var(--muted-foreground); }
+  .guide {
+    display:grid; grid-template-columns:auto 1fr auto 1fr; gap:.45rem .8rem;
+    align-items:center; margin:0 0 .9rem; font-size:.85rem;
+  }
+  .guide dt { text-align:right; }
+  .guide dd { margin:0; color:var(--muted-foreground); }
+  #welcomeClose {
+    align-self:flex-start;
+    background:var(--primary); color:var(--primary-foreground);
+    border:2px solid var(--primary); padding:.5rem 1.4rem;
+    border-radius:var(--radius-lg); font:inherit; font-weight:700; font-size:.95rem; cursor:pointer;
+  }
+
+  #recent .card, #menu .card { width:min(28rem, 88vw); padding:1.1rem 0 .6rem; }
+  .ritem, .mitem {
+    display:flex; align-items:center; gap:.7rem; padding:.55rem .8rem;
+    border-radius:var(--radius-lg); border:2px solid transparent;
+    cursor:pointer; transition:background .12s, border-color .12s;
+  }
+  .ritem .logo { width:2.1rem; height:2.1rem; }
+  .ritem .rinfo { flex:1; min-width:0; }
+  .ritem .rname { font-size:1rem; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .ritem .rtime { font-size:.8rem; color:var(--muted-foreground); }
+  .mitem { font-size:1rem; font-weight:500; }
+  .mitem .ic { color:var(--muted-foreground); font-size:1.15em; }
+  .ritem.focused, .mitem.focused {
+    background:var(--muted); border-color:var(--primary); box-shadow:0 0 0 3px var(--ring);
+  }
+  .ritem.focused .rname, .mitem.focused .ic { color:var(--primary); }
+  .rempty { padding:1.6rem 1.2rem; text-align:center; font-size:.95rem; color:var(--muted-foreground); }
+
+  /* ---- Touch screens: bigger targets, no keyboard hints ---- */
+  .touch .hbtn, .touch #url { min-height:2.9rem; }
+  .touch #hint { display:none; }
+  @media (max-width: 40rem) {
+    .guide { grid-template-columns:auto 1fr; }
+    .guide dd[style] { grid-column:auto !important; }
+  }
+
+  /* ---- Portrait (phones, tablets, tall windows): video on top at 16:9,
+     channel list below, always visible ---- */
+  @media (max-aspect-ratio: 1/1) {
+    :root {
+      --safe-x: max(.75rem, env(safe-area-inset-left));
+      --safe-y: .75rem;
+      --strip-w: 100vw;
+      --vid-top: env(safe-area-inset-top, 0px);
+      --vid-h: 56.25vw;
+    }
+    #video, #tap { top:var(--vid-top); bottom:auto; height:var(--vid-h); }
+    #strip, #strip.open {
+      top:calc(var(--vid-top) + var(--vid-h)); bottom:0; height:auto; width:100%;
+      transform:none; border-right:0; border-top:1px solid var(--border);
+      padding:.75rem max(.75rem, env(safe-area-inset-right)) calc(.5rem + env(safe-area-inset-bottom)) var(--safe-x);
+    }
+    /* Filter takes the list's place under the video — the video stays visible */
+    #filter {
+      top:calc(var(--vid-top) + var(--vid-h)); bottom:0; height:auto; width:100%;
+      border-right:0; border-top:1px solid var(--border);
+      padding:.75rem max(.75rem, env(safe-area-inset-right)) calc(.75rem + env(safe-area-inset-bottom)) var(--safe-x);
+    }
+    #status, .strip-open #status {
+      top:calc(var(--vid-top) + var(--vid-h) / 2); left:50%;
+      max-width:92vw; padding:.6rem 1rem; gap:.3rem; font-size:.85rem;
+    }
+    #status > .spin { width:1.6rem; height:1.6rem; }
+    #status > .ic { display:none; }   /* the video area is small: text + buttons only */
+    #status b { font-size:.95rem; }
+    .controls-on #status { visibility:hidden; }   /* the bar has its own ◀ ▶ while it's up */
+    #banner, .strip-open #banner, .controls-on #banner {
+      left:.75rem; right:.75rem; bottom:calc(.75rem + env(safe-area-inset-bottom));
+      max-width:none; font-size:.9rem; padding:.55rem .8rem;
+    }
+    #controls, .strip-open #controls { left:50%; bottom:auto; top:calc(var(--vid-top) + var(--vid-h) - 3.9rem); }
+    #controls [data-act="channels"] { display:none; }
+    #numpad { top:calc(var(--vid-top) + .5rem); font-size:2rem; }
+    #clock, #hint { display:none; }
+  }
+
+  /* Short landscape (phone sideways): bottom is busy with the control bar and
+     the status card's buttons — show the popup banner at the top instead. */
+  @media (min-aspect-ratio: 1/1) and (max-height: 520px) {
+    #banner, .controls-on #banner { top:var(--safe-y); bottom:auto; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { transition-duration:0s !important; animation-delay:0s !important; }
+    .spin { animation-duration:1.6s; }
+  }
+</style>
+</head>
+
+<body>
+  <!-- Icon sprite (SVG instead of emoji: renders the same on every TV) -->
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <!-- App logo, one colour (source: art/logo-mono.svg) -->
+    <symbol id="i-logo" viewBox="100 140 880 880"><g fill="none" stroke="currentColor" stroke-width="40" stroke-linecap="round" stroke-linejoin="round"><path d="M345 735Q240 748 178 760Q138 768 138 728V245Q138 212 172 208Q356 178 540 178Q724 178 908 208Q942 212 942 245V728Q942 768 902 760Q840 748 735 735"/> <circle cx="540" cy="538" r="238" stroke-width="34"/> <path d="M470 425V651L652 538Z" fill="currentColor" stroke-width="36"/> <circle cx="316" cy="852" r="29" fill="currentColor" stroke="none"/><path d="M393 852H773"/> <path d="M305 930H686"/><circle cx="764" cy="930" r="29" fill="currentColor" stroke="none"/></g></symbol>
+    <symbol id="i-tv" viewBox="0 0 24 24"><rect x="2.5" y="6" width="19" height="13" rx="2.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8.5 2.5 12 6l3.5-3.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24"><path d="M8 5.5v13l10.5-6.5z"/></symbol>
+    <symbol id="i-pause" viewBox="0 0 24 24"><path d="M7 5h3.5v14H7zM13.5 5H17v14h-3.5z"/></symbol>
+    <symbol id="i-star" viewBox="0 0 24 24"><path d="m12 2.8 2.8 5.9 6.4.8-4.7 4.4 1.2 6.4L12 17.2l-5.7 3.1 1.2-6.4-4.7-4.4 6.4-.8z"/></symbol>
+    <symbol id="i-star-off" viewBox="0 0 24 24"><path d="m12 2.8 2.8 5.9 6.4.8-4.7 4.4 1.2 6.4L12 17.2l-5.7 3.1 1.2-6.4-4.7-4.4 6.4-.8z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></symbol>
+    <symbol id="i-filter" viewBox="0 0 24 24"><path d="M3.5 5h17l-6.5 7.5V19l-4 2v-8.5z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></symbol>
+    <symbol id="i-vol" viewBox="0 0 24 24"><path d="M4 9.5v5h3.5L12 18.5v-13L7.5 9.5z"/><path d="M15.5 9a4.5 4.5 0 0 1 0 6M18 6.5a8 8 0 0 1 0 11" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+    <symbol id="i-mute" viewBox="0 0 24 24"><path d="M4 9.5v5h3.5L12 18.5v-13L7.5 9.5z"/><path d="m16 9.5 5 5m0-5-5 5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+    <symbol id="i-alert" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 7.5v5.5M12 16.5v.01" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></symbol>
+    <symbol id="i-history" viewBox="0 0 24 24"><path d="M3.5 12a8.5 8.5 0 1 0 2.6-6.1L3.5 8.5M3.5 3.5v5h5M12 7.5V12l3 2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-back" viewBox="0 0 24 24"><path d="M9 14 4 9l5-5M4 9h10.5a5.5 5.5 0 0 1 0 11H11" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-help" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.4 2.3c-.6.3-.9.8-.9 1.4v.3M12 16.5v.01" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+    <symbol id="i-retry" viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.3-5.7L20 8.5M20 3.5v5h-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-prev" viewBox="0 0 24 24"><path d="M6 5h2.5v14H6zM19 5.5v13L9.5 12z"/></symbol>
+    <symbol id="i-next" viewBox="0 0 24 24"><path d="M15.5 5H18v14h-2.5zM5 5.5v13l9.5-6.5z"/></symbol>
+    <symbol id="i-list" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+    <symbol id="i-expand" viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-shrink" viewBox="0 0 24 24"><path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-more" viewBox="0 0 24 24"><circle cx="5.5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="18.5" cy="12" r="2"/></symbol>
+    <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></symbol>
+  </svg>
+
+  <video id="video" playsinline></video>
+  <div id="tap" class="pointer-ui"></div>
+
+  <!-- Pointer controls (mouse / touch): browser, and the app on phones / tablets. TV uses the remote -->
+  <div id="controls" class="pointer-ui">
+    <button class="cbtn" data-act="channels" aria-label="Channels"><svg class="ic"><use href="#i-list"/></svg></button>
+    <button class="cbtn" data-act="prev" aria-label="Previous channel"><svg class="ic"><use href="#i-prev"/></svg></button>
+    <button class="cbtn big" data-act="pause" aria-label="Pause"><svg class="ic"><use href="#i-pause"/></svg></button>
+    <button class="cbtn" data-act="next" aria-label="Next channel"><svg class="ic"><use href="#i-next"/></svg></button>
+    <button class="cbtn" data-act="mute" aria-label="Mute"><svg class="ic"><use href="#i-vol"/></svg></button>
+    <button class="cbtn" data-act="fullscreen" aria-label="Fullscreen"><svg class="ic"><use href="#i-expand"/></svg></button>
+    <button class="cbtn" data-act="options" aria-label="Options"><svg class="ic"><use href="#i-more"/></svg></button>
+  </div>
+
+  <div id="strip" class="open">
+    <div class="brand"><svg class="ic logo"><use href="#i-logo"/></svg>MZ IPTV</div>
+    <div class="head">
+      <form id="urlform"><input id="url" type="url" spellcheck="false" autocomplete="off" placeholder="Playlist URL — blank = default" /></form>
+      <button id="load" class="hbtn primary">Load</button>
+      <label id="fileBtn" class="hbtn web-only" for="file">File</label>
+      <input id="file" type="file" accept=".m3u,.m3u8,audio/x-mpegurl,application/vnd.apple.mpegurl" hidden />
+      <button id="openFilter" class="hbtn"><svg class="ic"><use href="#i-filter"/></svg>Filter</button>
+    </div>
+    <div class="filterline" id="filterline"></div>
+    <div id="list"><div id="sizer"></div><div id="empty" hidden></div></div>
+    <div class="foot" id="foot"></div>
+  </div>
+
+  <!-- Filter panel (built in JS, navigated with the D-pad) -->
+  <div id="filter">
+    <div class="fhead"><h3 id="ftitle">Filter</h3><button class="mclose" data-act="closeFilter" aria-label="Close"><svg class="ic"><use href="#i-close"/></svg></button></div>
+    <div id="fcount"></div>
+    <div id="fitems"></div>
+    <div id="fpick" hidden></div>
+  </div>
+
+  <div id="status"></div>
+  <div id="numpad"></div>
+  <div id="banner"></div>
+
+  <!-- Options menu (hold OK) -->
+  <div id="menu" class="modal">
+    <div class="card">
+      <div class="mhead"><h3 id="mtitle">Options</h3><span id="mkeys"></span><button class="mclose" data-act="closeMenu" aria-label="Close"><svg class="ic"><use href="#i-close"/></svg></button></div>
+      <div class="mlist" id="mlist"></div>
+    </div>
+  </div>
+
+  <!-- Recently watched -->
+  <div id="recent" class="modal">
+    <div class="card">
+      <div class="mhead"><h3>Recently watched</h3><span id="rkeys"></span><button class="mclose" data-act="closeRecent" aria-label="Close"><svg class="ic"><use href="#i-close"/></svg></button></div>
+      <div class="mlist" id="rlist"></div>
+    </div>
+  </div>
+
+  <div id="welcome" class="modal">
+    <div class="card">
+      <div class="wmark" aria-hidden="true"><svg><use href="#i-logo"/></svg></div>
+      <h2>Welcome to <span>MZ IPTV Player</span></h2>
+      <p id="welcomeLead"></p>
+      <dl class="guide" id="guide"></dl>
+      <p class="legal">This player only plays links you provide — it doesn't host, store, or supply
+         any streams. You're responsible for what you load.</p>
+      <button id="welcomeClose" class="hf">Got it</button>
+    </div>
+  </div>
+  <div id="clock"></div>
+  <div id="hint"></div>
+
+<script>
+/* =======================================================================
+   MZ IPTV — hybrid build. One page, two hosts:
+     • Browser: plays through <video> + hls.js (loaded on demand).
+     • Android TV app: the native layer injects `MZNative`; ExoPlayer draws
+       the video UNDER this transparent page. Remote buttons the WebView
+       can't see (Back, Menu, CH±, colour keys…) arrive via mzOnRemote(),
+       player state via mzOnNative(). UI, focus, filters, store: shared.
+       On a phone / tablet the app also gets the touch UI (control bar,
+       swipes, buttons) — same as the browser.
+   ======================================================================= */
+
+const NATIVE = !!(window.MZNative && typeof MZNative.play === "function");
+// Built-in playlist: used on first run, when the URL field is left blank,
+// and as the fallback when a saved playlist can't be loaded.
+// iptv-org rebuilds this file every day at 00:00 UTC.
+const DEFAULT_URL = "https://iptv-org.github.io/iptv/index.m3u";
+const REFRESH_MS = 6 * 60 * 60 * 1000;   // re-download the playlist when it's older than this
+const HLS_JS = "vendor/hls.min.js";   // hls.js 1.5.13, bundled; loaded only when a browser needs it
+const BUFFER = 6;          // extra rows rendered above/below the viewport
+let ROW_H = 58;            // px — measured from the root font size in measure()
+// Portrait = video on top, list below, list always visible (CSS does the layout).
+const PORTRAIT = matchMedia("(max-aspect-ratio: 1/1)");
+// Touch screen (browser, or the app on a phone / tablet): control bar,
+// swipes, buttons and tap/hold copy instead of keys. Also switched on by
+// the first real touch (touch laptops, odd browsers). Never on a TV.
+let TOUCH = !(NATIVE && MZNative.isTv()) && matchMedia("(hover: none) and (pointer: coarse)").matches;
+// Real buttons in the status card / empty list: browser and touch screens. TV: key hints.
+const useButtons = () => !NATIVE || TOUCH;
+let lastInputAt = 0;       // last key / pointer activity (background refresh waits for idle)
+
+const $ = (id) => document.getElementById(id);
+const els = {
+  url:$("url"), urlform:$("urlform"), load:$("load"), file:$("file"), fileBtn:$("fileBtn"),
+  openFilter:$("openFilter"), list:$("list"), sizer:$("sizer"), empty:$("empty"),
+  video:$("video"), strip:$("strip"), banner:$("banner"), numpad:$("numpad"),
+  filterline:$("filterline"), foot:$("foot"), status:$("status"),
+  filter:$("filter"), ftitle:$("ftitle"), fitems:$("fitems"), fpick:$("fpick"), fcount:$("fcount"),
+  welcome:$("welcome"), welcomeClose:$("welcomeClose"), welcomeLead:$("welcomeLead"), guide:$("guide"),
+  recent:$("recent"), rlist:$("rlist"), rkeys:$("rkeys"),
+  menu:$("menu"), mlist:$("mlist"), mtitle:$("mtitle"), mkeys:$("mkeys"),
+  hint:$("hint"), clock:$("clock"), tap:$("tap"), controls:$("controls"),
+};
+
+let channels = [];          // master list
+let view = [];              // filtered subset actually shown
+let rendered = new Map();
+let focusIndex = 0;         // index into VIEW
+let playingUrl = null, playingCh = null, prevUrl = null;
+let playState = "idle";     // "idle" | "loading" | "buffering" | "playing" | "paused" | "error"
+let muted = false, loadingPlaylist = false;
+let mode = "list";          // "list" | "filter" | "welcome" | "recent" | "menu"
+let zone = "list";          // inside list mode: channel rows, or the top "head" bar
+let headFocus = 0;
+
+// ---- Small helpers ----
+const ESC = { "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" };
+const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ESC[c]);
+const ic = (name, cls) => '<svg class="ic' + (cls ? " " + cls : "") + '"><use href="#i-' + name + '"/></svg>';
+const SPIN = '<span class="spin"></span>';
+const SPIN_SM = '<span class="spin sm"></span>';
+const KEY = NATIVE
+  ? { ok:"OK", back:"BACK", up:"▲", left:"◀", right:"▶", play:"▶❚❚" }
+  : { ok:"Enter", back:"Esc", up:"↑", left:"←", right:"→", play:"Space" };
+const kbd = (s) => "<kbd>" + s + "</kbd>";
+// List rows keep a hidden placeholder so names stay aligned; the banner
+// (collapse) drops a logo that fails to load instead of leaving a gap.
+function logoHtml(url, collapse) {
+  return /^https?:\/\//i.test(url || "")
+    ? '<img class="logo" src="' + esc(url) + '" loading="lazy" alt="" onerror="' + (collapse ? "this.remove()" : "this.style.visibility=\'hidden\'") + '">'
+    : '<span class="logo"></span>';
+}
+
+// Row height follows the root font size so the list scales with the screen.
+// JS is the single source of truth: it writes --row-h for the CSS.
+function measure() {
+  const fs = parseFloat(getComputedStyle(document.documentElement).fontSize) || 18;
+  ROW_H = Math.round(fs * 3.2);
+  document.documentElement.style.setProperty("--row-h", ROW_H + "px");
+}
+
+// ---- Store (remembers source, favourites, filters, history) ----
+// Favourites, history and the last channel are keyed by channel KEY
+// (tvg-id when the playlist has one, else the stream URL) so they survive
+// the playlist changing a channel's stream link.
+const STORE_KEY = "tv.iptv.store.v1", TEXT_LIMIT = 1500000;
+let favorites = new Set(), lastChannelKey = null, savedSource = null, seenWelcome = false;
+let recentlyWatched = [];          // [{key, url, name, logo, watchedAt}] — newest first
+const RECENT_MAX = 15;
+const filter = { search:"", favOnly:false, country:null, category:null };
+
+function loadStore() {
+  try {
+    const s = JSON.parse(localStorage.getItem(STORE_KEY)); if (!s) return;
+    favorites = new Set(s.favorites || []);
+    lastChannelKey = s.lastChannelKey || s.lastChannelUrl || null;   // older builds stored a URL
+    savedSource = s.source || null;
+    seenWelcome = !!s.seenWelcome;
+    recentlyWatched = s.recentlyWatched || [];
+    if (s.filter) Object.assign(filter, s.filter);
+  } catch (e) {}
+}
+function saveStore() {
+  try {
+    localStorage.setItem(STORE_KEY, JSON.stringify({
+      source: savedSource, lastChannelKey, favorites: [...favorites],
+      filter, seenWelcome, recentlyWatched,
+    }));
+  } catch (e) {}
+}
+
+// ---- Strip + auto-hide ----
+// Remote / keyboard / mouse: the list slides away after 8 s without input.
+// Touch screens: no timer (a slow finger-scroll isn't "input" to it) — the
+// list closes on picking a channel, tapping the video, or Back.
+const STRIP_HIDE = 8000;
+let hideTimer = null;
+const isOpen = () => PORTRAIT.matches || els.strip.classList.contains("open");
+const typing = () => document.activeElement === els.url || document.activeElement === fsearch;
+function scheduleHide() {
+  clearTimeout(hideTimer); hideTimer = null;
+  if (TOUCH) return;
+  hideTimer = setTimeout(() => { if (mode === "list" && zone === "list" && !typing()) hideStrip(); }, STRIP_HIDE);
+}
+function showStrip() { els.strip.classList.add("open"); document.body.classList.add("strip-open"); scheduleHide(); }
+function hideStrip() {
+  if (mode !== "list") return;
+  if (document.activeElement === els.url) els.url.blur();
+  setZone("list");
+  if (PORTRAIT.matches) return;   // portrait: the list lives under the video, never hidden
+  els.strip.classList.remove("open"); document.body.classList.remove("strip-open");
+  clearTimeout(hideTimer);
+}
+
+// ---- Top bar ("head" zone): URL · Load · File (browser) · Filter ----
+const headItems = () => [els.url, els.load, els.fileBtn, els.openFilter].filter((el) => el.offsetParent !== null);
+function setZone(z) {
+  zone = z;
+  if (z === "head") headFocus = Math.min(headFocus, headItems().length - 1);
+  renderHead();
+}
+function renderHead() {
+  els.strip.classList.toggle("zone-head", zone === "head");
+  headItems().forEach((el, i) => el.classList.toggle("hf", zone === "head" && i === headFocus));
+}
+
+// ---- Chrome (clock + hint) auto-hide: show on activity, fade when idle ----
+const CHROME_HIDE = 5000;
+let chromeTimer = null;
+function showChrome() {
+  document.body.classList.remove("chrome-hidden");
+  clearTimeout(chromeTimer);
+  chromeTimer = setTimeout(() => document.body.classList.add("chrome-hidden"), CHROME_HIDE);
+}
+
+// ---- Banner ----
+let bannerTimer = null;
+function showBanner(html, ms) {
+  els.banner.innerHTML = html; els.banner.classList.add("show");
+  clearTimeout(bannerTimer); bannerTimer = setTimeout(() => els.banner.classList.remove("show"), ms || 4000);
+  showChrome();
+}
+
+// ---- Status card: tuning / buffering / paused / error (error stays up
+// until something actually plays — restricted channels are expected) ----
+function setStatus(kind, html) { els.status.className = kind || ""; els.status.innerHTML = kind ? html : ""; }
+
+// ---- Parser (country from tvg-id, multi-group categories) ----
+function countryFromId(tvgId) {
+  if (!tvgId) return null;
+  const a = tvgId.split(".")[1]; if (!a) return null;
+  const cc = a.split("@")[0].toLowerCase();
+  return /^[a-z]{2}$/.test(cc) ? cc.toUpperCase() : null;
+}
+const CC_ALIASES = { UK:"GB" };
+const regionNames = (() => { try { return new Intl.DisplayNames(["en"], { type:"region" }); } catch { return null; } })();
+function countryName(cc) { if (!cc) return "All"; const iso = CC_ALIASES[cc] || cc; try { return (regionNames && regionNames.of(iso)) || cc; } catch { return cc; } }
+const ccNames = {};
+const ccName = (cc) => ccNames[cc] || (ccNames[cc] = countryName(cc));
+
+// iptv-org packs extra info into the name — "BBC News (720p) [Geo-blocked]".
+// Pull it out into fields (shown as badges) and keep the name clean.
+function parseName(raw) {
+  const res = (raw.match(/\((\d{3,4})[pi]\)/) || [])[1];
+  const name = raw.replace(/\s*\(\d{3,4}[pi]\)/g, "").replace(/\s*\[(Geo-blocked|Not 24\/7)\]/gi, "").trim();
+  return { name: name || raw, res: res ? +res : 0, geo: /\[Geo-blocked\]/i.test(raw), part: /\[Not 24\/7\]/i.test(raw) };
+}
+const attr = (line, name) => (line.match(new RegExp(name + '="([^"]*)"')) || [])[1] || "";
+
+function parseM3U(text) {
+  const lines = text.split(/\r?\n/); const out = []; let cur = null;
+  for (const raw of lines) {
+    const line = raw.trim(); if (!line) continue;
+    if (line.startsWith("#EXTINF")) {
+      const tvg = attr(line, "tvg-id");
+      const { name, res, geo, part } = parseName(line.slice(line.lastIndexOf(",") + 1).trim() || "Unnamed");
+      const groups = attr(line, "group-title").split(";").map(s => s.trim()).filter(Boolean);
+      if (!groups.length) groups.push("Uncategorized");
+      const country = countryFromId(tvg);
+      cur = { name, logo:attr(line, "tvg-logo"), url:"", groups, tvg, country, res, geo, part,
+              feed: tvg.split("@")[1] || "",
+              ua: attr(line, "http-user-agent"), ref: attr(line, "http-referrer"),   // headers some streams require
+              find: (name + " " + (country ? ccName(country) : "") + " " + groups.join(" ")).toLowerCase() };
+    } else if (line.startsWith("#EXTVLCOPT:")) {
+      const m = line.match(/^#EXTVLCOPT:http-(user-agent|referrer)=(.*)$/i);
+      if (cur && m) cur[m[1].toLowerCase() === "referrer" ? "ref" : "ua"] = m[2].trim();
+    } else if (line.startsWith("#")) { continue; }
+    else if (cur) {
+      cur.url = line; cur.isHls = line.includes(".m3u8");
+      cur.key = cur.tvg ? "id:" + cur.tvg : line;   // stable identity (see STORE)
+      out.push(cur); cur = null;
+    }
+  }
+  return out;
+}
+
+// Favourites / history from older builds were keyed by stream URL: move
+// them to the channel key the first time we see that channel.
+function migrateKeys() {
+  let changed = false;
+  for (const ch of channels) {
+    if (ch.key === ch.url) continue;
+    if (favorites.has(ch.url)) { favorites.delete(ch.url); favorites.add(ch.key); changed = true; }
+    if (lastChannelKey === ch.url) { lastChannelKey = ch.key; changed = true; }
+  }
+  for (const r of recentlyWatched) {
+    if (r.key) continue;
+    const ch = channels.find(c => c.url === r.url);
+    r.key = ch ? ch.key : r.url; changed = true;
+  }
+  if (changed) saveStore();
+}
+
+// ---- Facet values (sorted by count desc) + counts for the pickers ----
+let countryValues = [], categoryValues = [], countryCounts = {}, categoryCounts = {};
+function computeFacets() {
+  const cc = {}, cat = {};
+  for (const ch of channels) {
+    if (ch.country) cc[ch.country] = (cc[ch.country] || 0) + 1;
+    for (const g of ch.groups) cat[g] = (cat[g] || 0) + 1;
+  }
+  countryCounts = cc; categoryCounts = cat;
+  countryValues  = Object.keys(cc).sort((a, b) => cc[b] - cc[a]);
+  categoryValues = Object.keys(cat).sort((a, b) => cat[b] - cat[a]);
+}
+
+// ---------------------------------------------------------------------
+// FILTERING: build `view` from `channels` + the active filter state
+// ---------------------------------------------------------------------
+function applyFilters(keepFocusKey) {
+  const q = filter.search.toLowerCase();
+  view = channels.filter(ch => {
+    if (q && !ch.find.includes(q)) return false;   // name, country or genre
+    if (filter.favOnly && !favorites.has(ch.key)) return false;
+    if (filter.country && ch.country !== filter.country) return false;
+    if (filter.category && !ch.groups.includes(filter.category)) return false;
+    return true;
+  });
+  const fi = keepFocusKey ? view.findIndex(c => c.key === keepFocusKey) : -1;
+  focusIndex = fi >= 0 ? fi : 0;
+  els.list.scrollTop = 0;
+  relayoutList();
+  updateFilterLine();
+}
+function clearFilters() {
+  Object.assign(filter, { search:"", favOnly:false, country:null, category:null });
+  fsearch.value = "";
+  applyFilters(playingCh && playingCh.key);
+  saveStore();
+}
+
+function updateFilterLine() {
+  if (loadingPlaylist) { els.filterline.innerHTML = SPIN_SM + "Loading playlist…"; return; }
+  const bits = [];
+  if (filter.search)   bits.push("“" + esc(filter.search) + "”");
+  if (filter.favOnly)  bits.push(ic("star") + " favourites");
+  if (filter.country)  bits.push(esc(countryName(filter.country)));
+  if (filter.category) bits.push(esc(filter.category));
+  els.filterline.innerHTML = bits.length
+    ? "<b>" + view.length + "</b> matches · " + bits.join(" · ")
+    : (channels.length ? "<b>" + channels.length + "</b> channels" : "");
+}
+
+// ---- Channel info: badges shared by the list rows and the banner ----
+const OTHER_GROUPS = new Set(["Uncategorized", "Undefined"]);
+const genres = (ch) => ch.groups.filter(g => !OTHER_GROUPS.has(g));
+const quality = (ch) => ch.res ? (ch.res >= 2160 ? "4K" : ch.res + "p") : (ch.feed === "HD" ? "HD" : "");
+// long: banner wording ("Geo-blocked") vs compact row wording ("Geo")
+function flagBadges(ch, long) {
+  const q = quality(ch);
+  return (q ? '<span class="badge q">' + q + '</span>' : "") +
+    (ch.geo ? '<span class="badge warn" title="Geo-blocked — may not play in your region">' + (long ? "Geo-blocked" : "Geo") + '</span>' : "") +
+    (ch.part ? '<span class="badge warn" title="Not 24/7 — may be off-air at times">' + (long ? "Not 24/7" : "Part-time") + '</span>' : "");
+}
+// Hover the 2-letter code for the full country name.
+const ccBadge = (ch) => ch.country ? '<span class="badge cc" title="' + esc(ccName(ch.country)) + '">' + ch.country + '</span>' : "";
+
+// ---- Virtualization core (renders VIEW) ----
+function buildRow(i) {
+  const ch = view[i];
+  const row = document.createElement("div");
+  row.className = "channel";
+  row.style.top = (i * ROW_H) + "px";
+  row.innerHTML = '<span class="num">' + String(i + 1).padStart(2, "0") + '</span>' + logoHtml(ch.logo) +
+    '<span class="txt"><span class="nm">' + ic("star", "favic") + esc(ch.name) + '</span>' +
+    '<span class="meta">' + ccBadge(ch) + flagBadges(ch) + '<span class="g">' + esc(genres(ch).join(" · ")) + '</span></span></span>' +
+    ic("play", "playind");
+  row.addEventListener("click", () => {
+    if (suppressClick) { suppressClick = false; return; }   // the click that ends a long-press
+    setZone("list"); setFocus(i); select();
+  });
+  // Long-press (touch) or right-click (mouse) → options for this channel.
+  row.addEventListener("contextmenu", (e) => { e.preventDefault(); holdRow(i); });
+  row.addEventListener("pointerdown", (e) => {
+    suppressClick = false;
+    if (e.pointerType === "mouse") return;
+    clearTimeout(pressTimer);
+    pressTimer = setTimeout(() => { suppressClick = true; holdRow(i); }, LONG_PRESS);
+  });
+  ["pointerup", "pointerleave", "pointercancel"].forEach((t) => row.addEventListener(t, () => clearTimeout(pressTimer)));
+  return row;
+}
+let pressTimer = null, suppressClick = false;
+function holdRow(i) {
+  if (mode === "menu") return;
+  setZone("list"); setFocus(i);
+  openMenu(view[i]);
+}
+function renderWindow() {
+  els.empty.hidden = view.length > 0;
+  if (!view.length) {
+    // TV: say which remote button to press. Browser / touch: a real button to click/tap.
+    els.empty.innerHTML = loadingPlaylist ? SPIN + "<span>Loading playlist…</span>"
+      : !channels.length ? "<b>No playlist loaded</b>" + (!useButtons()
+          ? "<span>Press " + kbd(KEY.up) + " then " + kbd(KEY.ok) + " on the URL field to add one</span>"
+          : '<button class="hbtn primary" data-act="loadDefault">' + ic("tv") + 'Load default playlist</button>')
+      : "<b>No channels match these filters</b>" + (!useButtons()
+          ? "<span>Press " + kbd(KEY.ok) + " to clear them</span>"
+          : '<button class="hbtn" data-act="clearFilters">' + ic("filter") + 'Clear filters</button>');
+    return;
+  }
+  const vh = els.list.clientHeight, st = els.list.scrollTop;
+  const first = Math.max(0, Math.floor(st / ROW_H) - BUFFER);
+  const last  = Math.min(view.length - 1, Math.ceil((st + vh) / ROW_H) + BUFFER);
+  for (const [idx, el] of rendered) if (idx < first || idx > last) { el.remove(); rendered.delete(idx); }
+  for (let i = first; i <= last; i++) {
+    let el = rendered.get(i);
+    if (!el) { el = buildRow(i); els.sizer.appendChild(el); rendered.set(i, el); }
+    el.classList.toggle("focused", i === focusIndex);
+    el.classList.toggle("playing", view[i].url === playingUrl);
+    el.classList.toggle("fav", favorites.has(view[i].key));
+  }
+}
+// Throw away rendered rows and rebuild — after a filter change or resize.
+function relayoutList() {
+  rendered.forEach(el => el.remove()); rendered.clear();
+  els.sizer.style.height = (view.length * ROW_H) + "px";
+  if (view.length) ensureVisible(focusIndex);
+  renderWindow();
+}
+function ensureVisible(i) {
+  const top = i * ROW_H, vh = els.list.clientHeight;
+  if (top < els.list.scrollTop) els.list.scrollTop = top;
+  else if (top + ROW_H > els.list.scrollTop + vh) els.list.scrollTop = top + ROW_H - vh;
+}
+function setFocus(i) {
+  if (!view.length) return;
+  focusIndex = Math.max(0, Math.min(view.length - 1, i));
+  ensureVisible(focusIndex);
+  renderWindow();
+}
+const pageSize = () => Math.max(1, Math.floor(els.list.clientHeight / ROW_H) - 1);
+
+// ---- Now-playing banner + Info peek ----
+// Two lines: "06  Channel name" / "[JP] Japan · News · Kids  [1080p] [Geo-blocked]"
+function showNowPlaying(ch, index) {
+  const num = String(index + 1).padStart(2, "0");
+  const where = ch.country ? ccBadge(ch) + "<span>" + esc(ccName(ch.country)) + "</span>" : "";
+  const what = genres(ch).length ? "<span>" + esc(genres(ch).join(" · ")) + "</span>" : "";
+  const line2 = where + (where && what ? "<span>·</span>" : "") + what + flagBadges(ch, true);
+  showBanner((/^https?:\/\//i.test(ch.logo || "") ? logoHtml(ch.logo, true) : "") +
+    '<span class="bn"><span class="bn1">' + num + '  <b>' + esc(ch.name) + '</b></span>' +
+    (line2 ? '<span class="bn2">' + line2 + '</span>' : "") + '</span>', 5000);
+}
+// Re-show what's playing WITHOUT changing anything (remote Info button).
+function infoPeek() {
+  if (!playingCh) { showBanner("Nothing playing yet"); return; }
+  const i = view.findIndex(c => c.url === playingUrl);
+  if (i >= 0) showNowPlaying(view[i], i);
+  else showBanner("Now watching: <b>" + esc(playingCh.name) + "</b>");
+}
+
+// ---- Tuning chokepoint (operates on VIEW, tracks by URL) ----
+function playIndex(i, opts) {
+  opts = opts || {};
+  if (i < 0 || i >= view.length) return;
+  const ch = view[i];
+  if (ch.url === playingUrl && playState !== "error") { hideStrip(); return; }   // same channel: just close (an errored one retries)
+  if (ch.url !== playingUrl) prevUrl = playingUrl;
+  playingUrl = ch.url; playingCh = ch;
+  setFocus(i);
+  tune(ch, opts);
+  if (!opts.autoResume) showNowPlaying(ch, i);
+  lastChannelKey = ch.key; pushRecent(ch);   // pushRecent saves the store
+}
+function tune(ch, opts) {
+  playState = "loading";
+  setStatus("busy", SPIN + "<span>Tuning <b>" + esc(ch.name) + "</b>…</span>");
+  player.play(ch, opts || {});
+}
+function select() { playIndex(focusIndex); hideStrip(); }
+function flip(delta) {
+  if (!view.length) return;
+  let base = playingUrl ? view.findIndex(c => c.url === playingUrl) : 0;
+  if (base < 0) base = 0;
+  const n = view.length;
+  playIndex(((base + delta) % n + n) % n);
+}
+function lastChannel() {
+  if (!prevUrl) { showBanner("No previous channel yet"); return; }
+  const i = view.findIndex(c => c.url === prevUrl);
+  if (i >= 0) playIndex(i); else showBanner("Previous channel isn't in the current filter");
+}
+
+// ---- Player state (both players report here) ----
+function onPlayerState(s) {
+  if (playState === "error" && s !== "playing") return;    // keep the error card up
+  if (playState === "loading" && s === "buffering") return; // keep "Tuning …" text
+  playState = s;
+  if (s === "buffering") setStatus("busy", SPIN + "<span>Buffering…</span>");
+  else if (s === "paused") setStatus("paused", ic("pause") + (!useButtons()
+    ? "<span>Paused · press " + kbd(KEY.play) + " to resume</span>"
+    : '<span class="sbtns"><button class="hbtn primary" data-act="pause">' + ic("play") + "Resume</button></span>" +
+      (TOUCH ? "" : "<small>or press " + kbd(KEY.play) + "</small>")));
+  else if (s === "playing") setStatus(null);
+  updateControls();
+}
+function onPlayerError(reason) {
+  playState = "error";
+  const ch = playingCh || {};
+  const name = playingCh ? esc(ch.name) : "This channel";
+  // What the playlist itself says about this channel — often the real reason.
+  const notes = [];
+  if (ch.geo) notes.push("The playlist marks it geo-blocked.");
+  if (ch.part) notes.push("The playlist marks it as not 24/7 — it may be off-air right now.");
+  if (!NATIVE && (ch.ua || ch.ref)) notes.push("It needs request headers a browser can't send — it should play in the TV app.");
+  const keys = "<small>" + kbd(KEY.left) + " " + kbd(KEY.right) + " change channel · " + kbd(KEY.ok) + " retry</small>";
+  setStatus("error", ic("alert") + "<b>" + name + " is unavailable</b><span>" + esc(reason) + "</span>" +
+    (notes.length ? "<small>" + esc(notes.join(" ")) + "</small>" : "") + (!useButtons() ? keys
+    : '<span class="sbtns"><button class="hbtn" data-act="retry">' + ic("retry") + 'Retry</button>' +
+      '<button class="hbtn" data-act="next">Next channel' + ic("next") + "</button></span>" + (TOUCH ? "" : keys)));
+  updateControls();
+}
+function httpReason(code) {
+  if (code === 401) return "This stream needs a login.";
+  if (code === 403) return "Access denied — the stream is probably geo-restricted.";
+  if (code === 404 || code === 410) return "Stream not found — it's probably offline.";
+  if (code >= 500) return "The stream's server failed (HTTP " + code + ").";
+  return "The stream's server answered HTTP " + code + ".";
+}
+
+// =====================================================================
+// PLAYERS — same 4 methods; NATIVE picks which one exists.
+// =====================================================================
+function nativePlayer() {
+  return {
+    play(ch)    { MZNative.play(ch.url, !!ch.isHls, ch.ua || "", ch.ref || ""); },
+    togglePause() { MZNative.togglePause(); },
+    setMuted(m) { MZNative.setMuted(!!m); },
+  };
+}
+// Native → page: {type:"state", state} | {type:"error", reason}
+window.mzOnNative = function (ev) {
+  if (!ev) return;
+  if (ev.type === "state") onPlayerState(ev.state);
+  else if (ev.type === "error") onPlayerError(ev.reason || "Playback failed.");
+};
+
+function webPlayer() {
+  const v = els.video;
+  let hls = null, hlsLoading = null, token = 0;
+  function loadHlsJs() {
+    if (window.Hls) return Promise.resolve();
+    if (!hlsLoading) hlsLoading = new Promise((res, rej) => {
+      const s = document.createElement("script");
+      s.src = HLS_JS; s.onload = res;
+      s.onerror = () => { hlsLoading = null; rej(new Error("hls.js failed to load")); };
+      document.head.appendChild(s);
+    });
+    return hlsLoading;
+  }
+  function teardown() {
+    if (hls) { hls.destroy(); hls = null; }
+    v.removeAttribute("src"); v.load();
+  }
+  function hlsReason(d) {
+    const code = d.response && d.response.code;
+    if (code) return httpReason(code);
+    if (d.type === "networkError") return "Blocked by the browser (CORS) or the stream is offline. Try it in the TV app.";
+    if (d.type === "mediaError") return "This browser can't decode the stream.";
+    return "Playback failed (" + d.details + ").";
+  }
+  function mediaReason(err) {
+    const c = err && err.code;
+    if (c === 2) return "Network error — the stream is probably offline.";
+    if (c === 3) return "This browser can't decode the stream.";
+    if (c === 4) return "The browser can't play this format, or the stream is offline.";
+    return "Playback failed.";
+  }
+  v.addEventListener("waiting", () => onPlayerState("buffering"));
+  v.addEventListener("playing", () => onPlayerState("playing"));
+  v.addEventListener("error", () => { if (!hls && v.getAttribute("src")) onPlayerError(mediaReason(v.error)); });
+
+  return {
+    async play(ch, opts) {
+      const my = ++token;
+      teardown();
+      if (location.protocol === "https:" && /^http:/i.test(ch.url)) {
+        onPlayerError("The browser blocks http:// streams on an https:// page. It works in the TV app.");
+        return;
+      }
+      const start = () => {
+        if (my !== token) return;
+        const p = v.play();
+        if (p && p.catch) p.catch((err) => {
+          if (my !== token || err.name === "AbortError") return;
+          if (err.name === "NotAllowedError") { if (opts.autoResume) fallbackToMuted(); else onPlayerState("paused"); }
+        });
+      };
+      if (ch.isHls && !v.canPlayType("application/vnd.apple.mpegurl")) {
+        try { await loadHlsJs(); } catch (e) { if (my === token) onPlayerError("Couldn't load the HLS player (vendor/hls.min.js is missing next to this page)."); return; }
+        if (my !== token) return;
+        if (window.Hls && Hls.isSupported()) {
+          hls = new Hls(); hls.loadSource(ch.url); hls.attachMedia(v);
+          hls.on(Hls.Events.MANIFEST_PARSED, start);
+          hls.on(Hls.Events.ERROR, (_e, d) => { if (d.fatal && my === token) { onPlayerError(hlsReason(d)); hls.destroy(); hls = null; } });
+          return;
+        }
+      }
+      v.src = ch.url;
+      start();
+    },
+    togglePause() {
+      if (v.paused) {
+        // Live TV: resume at the live edge (as the TV app does), not minutes behind.
+        if (v.duration === Infinity && v.seekable.length) v.currentTime = Math.max(0, v.seekable.end(v.seekable.length - 1) - 3);
+        const p = v.play(); if (p && p.catch) p.catch(() => {}); onPlayerState("playing");
+      }
+      else { v.pause(); onPlayerState("paused"); }
+    },
+    setMuted(m) { v.muted = m; },
+  };
+}
+const player = NATIVE ? nativePlayer() : webPlayer();
+
+function toggleMute() {
+  muted = !muted; pendingUnmute = false;
+  player.setMuted(muted);
+  showBanner(ic(muted ? "mute" : "vol") + (muted ? "Muted" : "Sound on"));
+  updateControls();
+}
+// Only once something is actually playing (or paused) — not while tuning or after an error.
+function togglePause() { if (playingCh && /^(playing|buffering|paused)$/.test(playState)) player.togglePause(); }
+
+// Browsers block autoplay WITH SOUND until the user interacts. On a cold
+// start, retry muted (picture comes up live) and unmute on the first key.
+// The TV app has no such restriction.
+let pendingUnmute = false;
+function fallbackToMuted() {
+  els.video.muted = true; muted = true;
+  const p = els.video.play();
+  if (p && p.catch) p.catch(() => {});
+  pendingUnmute = true;
+  showBanner(ic("mute") + (TOUCH ? "Resumed muted — tap anywhere to unmute" : "Resumed muted — press any key or click to unmute"));
+  updateControls();
+}
+function clearPendingUnmute() {
+  if (!pendingUnmute) return;
+  pendingUnmute = false; muted = false;
+  player.setMuted(false);
+  updateControls();
+}
+
+// ---- Favourites ----
+const favTarget = () => (isOpen() ? view[focusIndex] : playingCh) || null;
+function toggleFav(ch) {
+  if (!ch) return;
+  const key = ch.key;
+  if (favorites.has(key)) favorites.delete(key); else favorites.add(key);
+  saveStore();
+  renderWindow();
+  showBanner(ic(favorites.has(key) ? "star" : "star-off") + (favorites.has(key) ? "Favourited " : "Removed ") + "<b>" + esc(ch.name) + "</b>");
+  if (filter.favOnly) applyFilters(key);   // favourites-only view: refresh
+}
+
+// ---- Number entry ----
+let numBuf = "", numTimer = null;
+function showNumpad() { els.numpad.textContent = numBuf || ""; els.numpad.classList.toggle("show", numBuf.length > 0); }
+function pushDigit(d) { if (numBuf.length >= 6) return; numBuf += d; showNumpad(); clearTimeout(numTimer); numTimer = setTimeout(commitNum, 1300); }
+function backspaceNum() { numBuf = numBuf.slice(0, -1); showNumpad(); if (!numBuf) clearTimeout(numTimer); }
+function commitNum() {
+  clearTimeout(numTimer);
+  const num = parseInt(numBuf, 10); numBuf = ""; showNumpad();
+  if (!num) return;
+  if (num >= 1 && num <= view.length) { playIndex(num - 1); hideStrip(); }
+  else showBanner("No channel " + num);
+}
+
+// ---- Loading ----
+function setLoading(on) {
+  loadingPlaylist = on;
+  els.load.disabled = on;
+  updateFilterLine(); renderWindow();
+  if (!playingUrl) setStatus(on ? "busy" : null, SPIN + "<span>Loading playlist…</span>");
+}
+// opts.refresh: swap in a newer copy of the SAME playlist without touching
+// playback, focus or the strip (see refreshInPlace). opts.quiet: no banner
+// unless the channel count changed.
+function ingest(text, label, opts) {
+  opts = opts || {};
+  const parsed = parseM3U(text);
+  if (!parsed.length) { if (!opts.quiet) showBanner(ic("alert") + "No channels in " + esc(label), 6000); return false; }
+  const before = channels.length;
+  channels = parsed;
+  computeFacets();
+  migrateKeys();
+  playlistLoadedAt = Date.now();
+  loadingPlaylist = false;
+  if (opts.refresh) { refreshInPlace(before, opts.quiet); return true; }
+
+  playingUrl = null; prevUrl = null;
+  applyFilters(lastChannelKey);     // build the view (honours restored filters)
+
+  const resumeIdx = lastChannelKey ? view.findIndex(c => c.key === lastChannelKey) : -1;
+  if (resumeIdx >= 0) {
+    // TV behaviour: power on -> the last channel is already playing.
+    playIndex(resumeIdx, { autoResume: true });
+    hideStrip();
+  } else {
+    showStrip();
+    showBanner(view.length.toLocaleString() + " channels from " + esc(label));
+  }
+  return true;
+}
+function refreshInPlace(before, quiet) {
+  // Keep what's playing; point it at its entry in the new list (by URL,
+  // else by key if the playlist changed that channel's stream link).
+  const cur = playingCh && (channels.find(c => c.url === playingUrl) || channels.find(c => c.key === playingCh.key));
+  if (cur) { playingCh = cur; playingUrl = cur.url; }
+  applyFilters(view[focusIndex] && view[focusIndex].key);
+  if (mode === "filter" && !picker) updateFilterMenu();
+  const diff = channels.length - before;
+  if (diff || !quiet) showBanner(ic("retry") + "Playlist updated · <b>" + channels.length.toLocaleString() + "</b> channels" +
+    (diff ? " (" + (diff > 0 ? "+" : "") + diff + ")" : ""));
+}
+
+const playlistLabel = (url) => url === DEFAULT_URL ? "the default playlist" : "your playlist";
+let loadSeq = 0;   // a newer load wins over an older one still downloading
+// opts: refresh/quiet (see ingest) · keepSource: don't remember this URL
+// · fallback: if it fails, load DEFAULT_URL instead.
+async function loadUrl(url, opts) {
+  opts = opts || {};
+  url = url || DEFAULT_URL;
+  const my = ++loadSeq;
+  if (!opts.refresh) setLoading(true);
+  try {
+    // In the TV app the native layer downloads the playlist (no CORS there).
+    // no-cache: always ask the server for the latest copy.
+    const res = await fetch(NATIVE ? "/proxy?url=" + encodeURIComponent(url) : url, { cache:"no-cache" });
+    if (!res.ok) throw new Error(NATIVE ? await res.text() : "HTTP " + res.status);
+    const text = await res.text();
+    if (my !== loadSeq) return false;
+    if (!opts.refresh) setLoading(false);
+    if (!ingest(text, playlistLabel(url), opts)) return false;
+    if (!opts.keepSource) { savedSource = { type:"url", url }; saveStore(); }
+    if (!opts.refresh || !typing()) els.url.value = url;
+    return true;
+  } catch (e) {
+    if (my !== loadSeq) return false;
+    if (!opts.refresh) setLoading(false);
+    const msg = !NATIVE && e instanceof TypeError ? "the browser blocked it (CORS) or you're offline" : e.message;
+    if (opts.fallback && url !== DEFAULT_URL) {
+      const ok = await loadUrl(DEFAULT_URL, { keepSource:true });
+      if (ok) showBanner(ic("alert") + "Couldn't load your playlist (" + esc(msg) + ") — showing the default one", 7000);
+      return ok;
+    }
+    if (opts.quiet) console.warn("Playlist refresh failed: " + msg);
+    else showBanner(ic("alert") + "Playlist load failed: " + esc(msg), 7000);
+    return false;
+  }
+}
+
+// ---- Keep the playlist fresh: iptv-org changes daily, and TV apps can
+// stay open for days. Re-download when older than REFRESH_MS — checked
+// every 15 min and whenever the app comes back to the screen — but never
+// while someone is browsing the list or a menu (it would move under them).
+let playlistLoadedAt = 0, refreshing = false;
+function maybeRefresh() {
+  if (!savedSource || savedSource.type !== "url" || loadingPlaylist || refreshing) return;
+  if (Date.now() - playlistLoadedAt < REFRESH_MS) return;
+  // Someone browsing the list (input in the last minute) or in a menu: the
+  // list would move under them — try again on the next check.
+  if (mode !== "list" || numBuf || (isOpen() && Date.now() - lastInputAt < 60000)) return;
+  refreshing = true;
+  loadUrl(savedSource.url, { refresh:true, quiet:true }).finally(() => { refreshing = false; });
+}
+function refreshNow() {
+  if (savedSource && savedSource.type === "url") loadUrl(savedSource.url, { refresh:true });
+  else loadUrl(DEFAULT_URL);
+}
+setInterval(maybeRefresh, 15 * 60 * 1000);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) maybeRefresh(); });
+window.mzOnResume = maybeRefresh;   // the Android app calls this when it returns to the screen
+function loadFile(file) {
+  if (!file) return;
+  const r = new FileReader();
+  r.onload = () => {
+    const text = String(r.result);
+    if (ingest(text, file.name)) {
+      savedSource = text.length < TEXT_LIMIT ? { type:"text", name:file.name, text } : { type:"file", name:file.name };
+      saveStore();
+    }
+  };
+  r.onerror = () => showBanner("Could not read file");
+  r.readAsText(file);
+}
+
+// Generic "move the .focused class inside a list container" used by the
+// country/category picker, the options menu and recently watched.
+function focusIn(container, i) {
+  const items = container.children;
+  if (!items.length) return 0;
+  i = Math.max(0, Math.min(items.length - 1, i));
+  for (let k = 0; k < items.length; k++) items[k].classList.toggle("focused", k === i);
+  items[i].scrollIntoView({ block:"nearest" });
+  return i;
+}
+let arrowRepeat = 0;   // consecutive auto-repeats of ▲/▼ — holding the key speeds up
+const repeatStep = () => (arrowRepeat > 30 ? 10 : arrowRepeat > 10 ? 3 : 1);
+
+// =====================================================================
+// FILTER PANEL — same D-pad focus model; Country/Category open pickers
+// =====================================================================
+let filterFocus = 0;
+const fsearch = document.createElement("input");   // search input lives in the panel
+fsearch.id = "fsearch"; fsearch.type = "search"; fsearch.placeholder = "Name, country or genre…";
+fsearch.autocomplete = "off"; fsearch.spellcheck = false;
+
+const fItems = [
+  { id:"search",   label:"Search",          kind:"search" },
+  { id:"fav",      label:"Favourites only", kind:"toggle", get:() => filter.favOnly ? "ON" : "OFF",
+    enter:() => { filter.favOnly = !filter.favOnly; afterFilterChange(); } },
+  { id:"country",  label:"Country",         kind:"cycle", get:() => countryName(filter.country),
+    cycle:(d) => cycleFacet("country", countryValues, d), enter:() => openPicker("country") },
+  { id:"category", label:"Category",        kind:"cycle", get:() => filter.category || "All",
+    cycle:(d) => cycleFacet("category", categoryValues, d), enter:() => openPicker("category") },
+  { id:"clear",    label:"Clear filters",   kind:"action", enter:() => { clearFilters(); updateFilterMenu(); } },
+  { id:"close",    label:"Close",           kind:"action", enter:() => closeFilter() },
+];
+
+function buildFilterMenu() {
+  els.fitems.innerHTML = "";
+  fItems.forEach((it, i) => {
+    const row = document.createElement("div");
+    row.className = "fitem" + (it.kind === "cycle" ? " cycle" : "") + (it.kind === "search" ? " search" : "");
+    if (it.kind === "search") {
+      const lab = document.createElement("span"); lab.textContent = it.label;
+      row.appendChild(lab); row.appendChild(fsearch);
+    } else {
+      row.innerHTML = '<span>' + it.label + '</span>' + (it.get ? '<span class="val"></span>' : '');
+    }
+    row.addEventListener("click", () => { filterFocus = i; activateFilterItem(); updateFilterMenu(); });
+    it._el = row;
+    els.fitems.appendChild(row);
+  });
+}
+function updateFilterMenu() {
+  els.fcount.innerHTML = "<b>" + view.length + "</b> matches";
+  fItems.forEach((it, i) => {
+    it._el.classList.toggle("focused", i === filterFocus);
+    const val = it._el.querySelector(".val");
+    if (val && it.get) val.textContent = it.get();
+  });
+  fItems[filterFocus]._el.scrollIntoView({ block:"nearest" });
+}
+function cycleFacet(key, values, dir) {
+  const list = [null, ...values];
+  let idx = list.indexOf(filter[key]); if (idx < 0) idx = 0;
+  idx = (idx + dir + list.length) % list.length;
+  filter[key] = list[idx];
+  afterFilterChange();
+}
+function afterFilterChange() {
+  applyFilters((playingCh && playingCh.key) || (view[focusIndex] && view[focusIndex].key));
+  updateFilterMenu();
+  saveStore();
+}
+function activateFilterItem() {
+  const it = fItems[filterFocus];
+  if (it.kind === "search") fsearch.focus();
+  else if (it.enter) it.enter();
+}
+
+// ---- Country / Category picker: a scrollable list instead of ‹ › stepping ----
+let picker = null;   // { key, values:[null, ...], focus }
+function openPicker(key) {
+  const values = [null].concat(key === "country" ? countryValues : categoryValues);
+  const counts = key === "country" ? countryCounts : categoryCounts;
+  picker = { key, values, focus: Math.max(0, values.indexOf(filter[key])) };
+  els.ftitle.textContent = key === "country" ? "Country" : "Category";
+  els.fpick.innerHTML = "";
+  values.forEach((v, i) => {
+    const row = document.createElement("div");
+    row.className = "fitem pitem" + (v === filter[key] ? " current" : "");
+    const label = v === null ? (key === "country" ? "All countries" : "All categories") : (key === "country" ? countryName(v) : v);
+    row.innerHTML = '<span class="pl">' + esc(label) + '</span><span class="val">' + (v === null ? channels.length : counts[v]) + '</span>';
+    row.addEventListener("click", () => { picker.focus = i; choosePick(); });
+    els.fpick.appendChild(row);
+  });
+  els.fitems.hidden = true; els.fpick.hidden = false;
+  picker.focus = focusIn(els.fpick, picker.focus);
+}
+function closePicker() {
+  picker = null;
+  els.ftitle.textContent = "Filter";
+  els.fpick.hidden = true; els.fpick.innerHTML = ""; els.fitems.hidden = false;
+  updateFilterMenu();
+}
+function choosePick() {
+  filter[picker.key] = picker.values[picker.focus];
+  closePicker();
+  afterFilterChange();
+}
+
+function openFilter(focusSearch) {
+  mode = "filter";
+  showStrip();
+  els.filter.classList.add("open");
+  document.body.classList.add("filter-open");
+  filterFocus = 0;
+  updateFilterMenu();
+  if (focusSearch) fsearch.focus();
+}
+function closeFilter() {
+  if (picker) closePicker();
+  mode = "list";
+  els.filter.classList.remove("open");
+  document.body.classList.remove("filter-open");
+  fsearch.blur();
+  scheduleHide();
+}
+
+// Live search as the user types
+fsearch.addEventListener("input", () => { filter.search = fsearch.value.trim(); afterFilterChange(); });
+
+// ---------------------------------------------------------------------
+// OPTIONS MENU (hold OK): actions that have no dedicated remote button
+// ---------------------------------------------------------------------
+let menuList = [], menuFocus = 0;
+// target: the channel the menu is about (long-pressed row, or the playing
+// channel from the ⋯ button); defaults to the focused / playing one.
+function openMenu(target) {
+  const ch = target === undefined ? favTarget() : target;
+  menuList = [];
+  if (ch) menuList.push(favorites.has(ch.key)
+    ? { icon:"star-off", label:"Remove from favourites", run:() => toggleFav(ch) }
+    : { icon:"star",     label:"Add to favourites",      run:() => toggleFav(ch) });
+  if (playState === "error" && playingCh) menuList.push({ icon:"retry", label:"Retry this channel", run:() => tune(playingCh) });
+  menuList.push(
+    { icon:"back",    label:"Previous channel",  run:lastChannel },
+    { icon:"history", label:"Recently watched",  run:openRecent },
+    { icon:"filter",  label:"Filter & search",   run:() => openFilter() },
+    { icon:muted ? "vol" : "mute", label:muted ? "Unmute" : "Mute", run:toggleMute },
+    { icon:"retry",   label:"Refresh playlist",  run:refreshNow },
+  );
+  if (!savedSource || savedSource.url !== DEFAULT_URL) menuList.push({ icon:"tv", label:"Load default playlist", run:() => loadUrl(DEFAULT_URL) });
+  menuList.push({ icon:"help", label:NATIVE ? "Remote guide" : "Controls guide", run:openWelcome });
+  mode = "menu";
+  els.mtitle.textContent = ch ? ch.name : "Options";
+  els.mlist.innerHTML = "";
+  menuList.forEach((it, i) => {
+    const row = document.createElement("div");
+    row.className = "mitem";
+    row.innerHTML = ic(it.icon) + "<span>" + esc(it.label) + "</span>";
+    row.addEventListener("click", () => runMenu(i));
+    els.mlist.appendChild(row);
+  });
+  els.menu.classList.add("open");
+  menuFocus = focusIn(els.mlist, 0);
+  clearTimeout(hideTimer);
+}
+function closeMenu() { mode = "list"; els.menu.classList.remove("open"); if (isOpen()) scheduleHide(); }
+function runMenu(i) { const it = menuList[i]; closeMenu(); if (it) it.run(); }
+
+// ---------------------------------------------------------------------
+// First-run WELCOME card — doubles as the "Remote guide" (options menu).
+// While open it owns input so keys can't leak through underneath it.
+// ---------------------------------------------------------------------
+function openWelcome() {
+  mode = "welcome";
+  els.welcome.classList.add("open");
+  showStrip();   // so the channel list is visible once it closes
+}
+function closeWelcome() {
+  mode = "list";
+  els.welcome.classList.remove("open");
+  if (!seenWelcome) { seenWelcome = true; saveStore(); }
+  scheduleHide();
+}
+
+// =====================================================================
+// RECENTLY WATCHED
+// =====================================================================
+function pushRecent(ch) {
+  recentlyWatched = recentlyWatched.filter(r => r.key !== ch.key);
+  recentlyWatched.unshift({ key:ch.key, url:ch.url, name:ch.name, logo:ch.logo || "", watchedAt:Date.now() });
+  if (recentlyWatched.length > RECENT_MAX) recentlyWatched.length = RECENT_MAX;
+  saveStore();
+}
+function timeAgo(ts) {
+  const s = Math.floor((Date.now() - ts) / 1000);
+  const n = (v, unit) => v + " " + unit + (v === 1 ? "" : "s") + " ago";
+  if (s < 60)    return "just now";
+  if (s < 3600)  return n(Math.floor(s / 60), "min");
+  if (s < 86400) return n(Math.floor(s / 3600), "hr");
+  return n(Math.floor(s / 86400), "day");
+}
+
+let recentFocus = 0;
+function renderRecent() {
+  els.rlist.innerHTML = "";
+  if (!recentlyWatched.length) {
+    els.rlist.innerHTML = '<div class="rempty">Nothing watched yet.<br>Play a channel and it\'ll appear here.</div>';
+    return;
+  }
+  recentlyWatched.forEach((r, i) => {
+    const item = document.createElement("div");
+    item.className = "ritem";
+    item.innerHTML = logoHtml(r.logo) +
+      '<div class="rinfo"><div class="rname">' + esc(r.name) + '</div>' +
+      '<div class="rtime">' + timeAgo(r.watchedAt) + '</div></div>';
+    item.addEventListener("click", () => playFromRecent(r));
+    els.rlist.appendChild(item);
+  });
+  recentFocus = focusIn(els.rlist, 0);
+}
+function playFromRecent(r) {
+  closeRecent();
+  const key = r.key || r.url;
+  let i = view.findIndex(c => c.key === key);
+  if (i >= 0) { playIndex(i); return; }
+  if (channels.some(c => c.key === key)) {   // hidden by the filter: clear it, then play
+    clearFilters();
+    i = view.findIndex(c => c.key === key);
+    if (i >= 0) playIndex(i);
+  } else {
+    showBanner("That channel isn't in the current playlist");
+  }
+}
+function openRecent() {
+  mode = "recent";
+  els.recent.classList.add("open");
+  renderRecent();
+  showStrip();
+}
+function closeRecent() {
+  mode = "list";
+  els.recent.classList.remove("open");
+  scheduleHide();
+}
+
+// ---------------------------------------------------------------------
+// INPUT MODEL
+// Keyboard keys and remote buttons both become ACTIONS, then dispatch()
+// routes each action by mode. OK is handled on key-up so that holding it
+// (≥ LONG_PRESS ms) can open the options menu instead.
+// ---------------------------------------------------------------------
+function keyAction(e) {
+  // Ctrl/Alt/Cmd + key belongs to the browser or the system (Ctrl+R, Ctrl+F…), not to us
+  if (e.ctrlKey || e.altKey || e.metaKey) return null;
+  const k = e.key;
+  if (k.length === 1 && k >= "0" && k <= "9") return "digit";
+  switch (k) {
+    case "ArrowUp": return "up";       case "ArrowDown": return "down";
+    case "ArrowLeft": return "left";   case "ArrowRight": return "right";
+    case "Escape": case "GoBack": case "BrowserBack": return "back";
+    case "Backspace": return "erase";
+    case "PageDown": case "ChannelUp": return "chPlus";
+    case "PageUp": case "ChannelDown": return "chMinus";
+    case "/": return "filter";
+    case "ContextMenu": return "options";
+    case " ": case "MediaPlayPause": return "playPause";
+    case "Info": return "info";
+  }
+  switch (k.toLowerCase()) {
+    case "f": return "fav"; case "r": return "recent";
+    case "i": return "info"; case "m": return "mute";
+  }
+  return null;
+}
+// Remote buttons the Android layer intercepts and forwards by name.
+// MENU = the options menu (as on Fire TV / Shield, and same as holding OK);
+// many remotes (Google TV, Chromecast) have no MENU, so nothing depends on it.
+const REMOTE = {
+  Back:"back", Menu:"options", Search:"search", Guide:"guide", Bookmark:"fav",
+  ChannelUp:"chPlus", ChannelDown:"chMinus", Next:"right", Previous:"left",
+  Info:"info", PlayPause:"playPause", Play:"play", Pause:"pause",
+  Red:"fav", Green:"recent", Yellow:"filter", Blue:"last", LastChannel:"last",
+};
+// Called by the Android layer; returns true when the page consumed the key
+// (false makes the app exit — used for Back).
+window.mzOnRemote = function (name) {
+  showChrome(); clearPendingUnmute();
+  const a = REMOTE[name];
+  if (!a) return false;
+  if (typing()) { if (a === "back") { document.activeElement.blur(); return true; } document.activeElement.blur(); }
+  return dispatch(a) !== false;
+};
+
+function dispatch(a, arg) {
+  // MENU: the same options menu as holding OK; pressed again, it closes it.
+  if (a === "options") {
+    if (mode === "menu") closeMenu();
+    else if (mode === "list") { if (numBuf) commitNum(); setZone("list"); openMenu(); }
+    return true;
+  }
+  switch (mode) {
+    case "welcome": if (a === "ok" || a === "okLong" || a === "back") closeWelcome(); return true;
+    case "menu":    return menuAction(a);
+    case "recent":  return recentAction(a);
+    case "filter":  return picker ? pickerAction(a) : filterAction(a);
+    default:        return zone === "head" && isOpen() ? headAction(a, arg) : listAction(a, arg);
+  }
+}
+
+let exitArmed = false, exitTimer = null;
+function listAction(a, arg) {
+  switch (a) {
+    case "up":
+      if (!isOpen()) showStrip();
+      else if (!view.length || (focusIndex === 0 && arrowRepeat === 0)) setZone("head");
+      else { setFocus(focusIndex - repeatStep()); scheduleHide(); }
+      break;
+    case "down":    if (!isOpen()) showStrip(); else { setFocus(focusIndex + repeatStep()); scheduleHide(); } break;
+    case "left":    flip(-1); break;
+    case "right":   flip(+1); break;
+    case "chPlus":  if (isOpen()) { setFocus(focusIndex + pageSize()); scheduleHide(); } else flip(+1); break;
+    case "chMinus": if (isOpen()) { setFocus(focusIndex - pageSize()); scheduleHide(); } else flip(-1); break;
+    case "ok":
+      if (numBuf) commitNum();
+      else if (!isOpen()) { if (playState === "error" && playingCh) tune(playingCh); else showStrip(); }
+      else if (!view.length) { if (channels.length) clearFilters(); else setZone("head"); }
+      else select();
+      break;
+    case "okLong":  if (numBuf) commitNum(); else openMenu(); break;
+    case "back":
+      if (numBuf) { numBuf = ""; clearTimeout(numTimer); showNumpad(); }
+      else if (isOpen() && !PORTRAIT.matches) hideStrip();
+      else if (NATIVE && appLandscape) toggleFullscreen();   // phone: leave forced landscape first
+      else if (NATIVE) {
+        if (exitArmed) { MZNative.exit(); break; }
+        exitArmed = true; showBanner(ic("back") + (TOUCH ? "Go back again to exit" : "Press " + kbd(KEY.back) + " again to exit"), 2500);
+        clearTimeout(exitTimer); exitTimer = setTimeout(() => { exitArmed = false; }, 2500);
+      }
+      break;
+    case "erase":   if (numBuf) backspaceNum(); else lastChannel(); break;
+    case "digit":   pushDigit(arg); break;
+    case "filter":  openFilter(); break;
+    case "search":  openFilter(true); break;
+    case "recent":  openRecent(); break;
+    case "fav":     toggleFav(favTarget()); break;
+    case "info":    infoPeek(); break;
+    case "mute":    toggleMute(); break;
+    case "playPause": togglePause(); break;
+    case "play":    if (playState === "paused") togglePause(); break;
+    case "pause":   if (playState === "playing" || playState === "buffering") togglePause(); break;
+    case "last":    lastChannel(); break;
+    case "guide":   if (isOpen()) hideStrip(); else showStrip(); break;
+    default: return false;
+  }
+  return true;
+}
+function headAction(a, arg) {
+  const items = headItems();
+  switch (a) {
+    case "left":  headFocus = Math.max(0, headFocus - 1); break;
+    case "right": headFocus = Math.min(items.length - 1, headFocus + 1); break;
+    case "up":    break;
+    case "down": case "back": setZone("list"); scheduleHide(); return true;
+    case "ok": case "okLong": {
+      const el = items[headFocus];
+      if (el === els.url) el.focus(); else if (el) el.click();
+      break;
+    }
+    default: setZone("list"); return listAction(a, arg);
+  }
+  renderHead(); scheduleHide();
+  return true;
+}
+function filterAction(a) {
+  const it = fItems[filterFocus];
+  switch (a) {
+    case "down":  filterFocus = Math.min(fItems.length - 1, filterFocus + 1); break;
+    case "up":    filterFocus = Math.max(0, filterFocus - 1); break;
+    case "right": if (it.cycle) it.cycle(+1); break;
+    case "left":  if (it.cycle) it.cycle(-1); break;
+    case "ok": case "okLong": activateFilterItem(); break;
+    case "search": filterFocus = 0; fsearch.focus(); break;
+    case "back": case "filter": closeFilter(); return true;
+    default: return true;   // swallow everything else while the panel is open
+  }
+  if (mode === "filter") updateFilterMenu();
+  return true;
+}
+function pickerAction(a) {
+  switch (a) {
+    case "down":    picker.focus = focusIn(els.fpick, picker.focus + repeatStep()); break;
+    case "up":      picker.focus = focusIn(els.fpick, picker.focus - repeatStep()); break;
+    case "chPlus":  picker.focus = focusIn(els.fpick, picker.focus + 8); break;
+    case "chMinus": picker.focus = focusIn(els.fpick, picker.focus - 8); break;
+    case "ok": case "okLong": choosePick(); break;
+    case "back": case "left": closePicker(); break;
+  }
+  return true;
+}
+function menuAction(a) {
+  switch (a) {
+    case "down": menuFocus = focusIn(els.mlist, menuFocus + 1); break;
+    case "up":   menuFocus = focusIn(els.mlist, menuFocus - 1); break;
+    case "ok": case "okLong": runMenu(menuFocus); break;
+    case "back": closeMenu(); break;
+  }
+  return true;
+}
+function recentAction(a) {
+  const has = recentlyWatched.length > 0;
+  switch (a) {
+    case "down": if (has) recentFocus = focusIn(els.rlist, recentFocus + 1); break;
+    case "up":   if (has) recentFocus = focusIn(els.rlist, recentFocus - 1); break;
+    case "ok": case "okLong": if (has && recentlyWatched[recentFocus]) playFromRecent(recentlyWatched[recentFocus]); break;
+    case "back": case "recent": closeRecent(); break;
+  }
+  return true;
+}
+
+// ---- Keys typed into the two text fields ----
+function urlKeys(e) {
+  if (e.key === "Escape" || e.key === "ArrowDown" || e.key === "ArrowUp") {
+    e.preventDefault(); els.url.blur();
+    if (e.key === "ArrowDown") { setZone("list"); scheduleHide(); }
+  }
+}
+function searchKeys(e) {
+  if (e.key === "Escape" || e.key === "Enter") { e.preventDefault(); fsearch.blur(); }
+  else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+    e.preventDefault(); fsearch.blur();
+    filterFocus = e.key === "ArrowDown" ? 1 : 0;
+    updateFilterMenu();
+  }
+}
+
+// Hold OK = options. A held key repeats its keydown; the first repeat is the
+// system saying "this is a long press" (Android sends it after its own
+// touch-and-hold delay), so that opens the menu. LONG_PRESS is the fallback.
+// Android WebView doesn't set e.repeat on those repeats, so "held" is tracked
+// here: a second keydown of a key before its keyup is a repeat.
+const LONG_PRESS = 550;
+let okArmed = false, okLongFired = false, okTimer = null;
+const heldKeys = new Set();
+const fireOkLong = () => { if (!okArmed || okLongFired) return; okLongFired = true; clearTimeout(okTimer); dispatch("okLong"); };
+document.addEventListener("keydown", (e) => {
+  showChrome();
+  lastInputAt = Date.now();
+  clearPendingUnmute();   // first key after a muted resume = unmute
+  const repeat = e.repeat || heldKeys.has(e.key);
+  heldKeys.add(e.key);
+  if (document.activeElement === els.url) { urlKeys(e); return; }
+  if (document.activeElement === fsearch) { searchKeys(e); return; }
+
+  if (e.key === "Enter") {
+    e.preventDefault();
+    if (!repeat) {
+      okArmed = true; okLongFired = false;
+      clearTimeout(okTimer);
+      okTimer = setTimeout(fireOkLong, LONG_PRESS);
+    } else fireOkLong();
+    return;
+  }
+  const a = keyAction(e);
+  if (!a) return;
+  e.preventDefault();
+  if (a === "up" || a === "down") arrowRepeat = repeat ? arrowRepeat + 1 : 0;
+  dispatch(a, e.key);
+});
+document.addEventListener("keyup", (e) => {
+  heldKeys.delete(e.key);
+  if (e.key !== "Enter" || !okArmed) return;
+  okArmed = false; clearTimeout(okTimer);
+  if (!okLongFired) dispatch("ok");
+});
+window.addEventListener("blur", () => { okArmed = false; clearTimeout(okTimer); heldKeys.clear(); });
+
+// ---------------------------------------------------------------------
+// POINTER INPUT (mouse + touch: browser, and the app on phones / tablets).
+// The TV never gets here.
+// ---------------------------------------------------------------------
+function setTouch(on) {
+  TOUCH = on;
+  if (on) { clearTimeout(hideTimer); hideTimer = null; }   // touch: the list doesn't auto-hide
+  document.documentElement.classList.toggle("touch", on);
+  applyPlatformCopy();
+}
+window.addEventListener("pointerdown", (e) => {
+  lastInputAt = Date.now();
+  clearPendingUnmute();   // a tap/click counts as the gesture that allows sound
+  if (e.pointerType === "touch" && !TOUCH) setTouch(true);
+}, true);
+// Mouse: moving shows the controls; nearing the left edge opens the list.
+window.addEventListener("pointermove", (e) => {
+  if (e.pointerType !== "mouse") return;
+  showChrome(); clearPendingUnmute(); showControls();
+  lastInputAt = Date.now();
+  if (mode !== "list") return;
+  if (!isOpen() && e.clientX < Math.max(48, innerWidth * 0.12)) showStrip();
+  else if (isOpen()) scheduleHide();
+});
+
+// Control bar: shown on a tap / mouse move, fades after 4 s (stays while paused).
+let controlsTimer = null;
+function showControls() {
+  if (NATIVE && !TOUCH) return;
+  updateControls();
+  document.body.classList.add("controls-on");
+  clearTimeout(controlsTimer);
+  controlsTimer = setTimeout(() => { if (playState !== "paused") document.body.classList.remove("controls-on"); }, 4000);
+}
+function hideControls() { clearTimeout(controlsTimer); document.body.classList.remove("controls-on"); }
+function updateControls() {
+  if (NATIVE && !TOUCH) return;
+  const set = (act, icon, label) => {
+    const b = els.controls.querySelector('[data-act="' + act + '"]');
+    b.querySelector("use").setAttribute("href", "#i-" + icon); b.setAttribute("aria-label", label);
+  };
+  set("pause", playState === "paused" ? "play" : "pause", playState === "paused" ? "Play" : "Pause");
+  set("mute", muted ? "mute" : "vol", muted ? "Unmute" : "Mute");
+  const full = NATIVE ? appLandscape : !!document.fullscreenElement;
+  set("fullscreen", full ? "shrink" : "expand", full ? "Exit fullscreen" : "Fullscreen");
+}
+
+// Fullscreen: whole page (so the list still works), turned sideways on
+// phones that allow it. iPhone has no page fullscreen → its native player.
+// The app is always fullscreen: the button just holds the phone sideways.
+let appLandscape = false;
+function toggleFullscreen() {
+  if (NATIVE) { appLandscape = !appLandscape; MZNative.setLandscape(appLandscape); updateControls(); return; }
+  if (document.fullscreenElement) { document.exitFullscreen().catch(() => {}); return; }
+  const root = document.documentElement;
+  if (root.requestFullscreen) {
+    root.requestFullscreen({ navigationUI:"hide" })
+      .then(() => { try { screen.orientation.lock("landscape").catch(() => {}); } catch (e) {} })
+      .catch(() => {});
+  } else if (els.video.webkitEnterFullscreen) els.video.webkitEnterFullscreen();
+}
+document.addEventListener("fullscreenchange", () => {
+  if (!document.fullscreenElement) { try { screen.orientation.unlock(); } catch (e) {} }
+  updateControls();
+});
+
+// Tap / swipe on the video: swipe ← → changes channel; a tap shows the
+// controls (or, in landscape, closes an open channel list first).
+let tapStart = null;
+els.tap.addEventListener("pointerdown", (e) => { tapStart = { x:e.clientX, y:e.clientY }; });
+els.tap.addEventListener("pointerup", (e) => {
+  if (!tapStart) return;
+  const dx = e.clientX - tapStart.x, dy = e.clientY - tapStart.y;
+  tapStart = null;
+  if (mode !== "list") return;
+  if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.5) { flip(dx < 0 ? +1 : -1); showControls(); return; }
+  if (Math.abs(dx) > 12 || Math.abs(dy) > 12) return;
+  if (!PORTRAIT.matches && els.strip.classList.contains("open")) { hideStrip(); return; }
+  if (document.body.classList.contains("controls-on") && e.pointerType !== "mouse") hideControls(); else showControls();
+});
+els.tap.addEventListener("pointercancel", () => { tapStart = null; });
+
+// Tap the dimmed backdrop of a modal to close it.
+els.menu.addEventListener("click", (e) => { if (e.target === els.menu) closeMenu(); });
+els.recent.addEventListener("click", (e) => { if (e.target === els.recent) closeRecent(); });
+els.welcome.addEventListener("click", (e) => { if (e.target === els.welcome) closeWelcome(); });
+
+// Every button with data-act (control bar, status card, empty list, ✕).
+function runAct(act) {
+  switch (act) {
+    case "channels":     showStrip(); break;
+    case "prev":         flip(-1); break;
+    case "next":         flip(+1); break;
+    case "pause":        togglePause(); break;
+    case "mute":         toggleMute(); break;
+    case "fullscreen":   toggleFullscreen(); break;
+    case "options":      openMenu(playingCh || view[focusIndex] || null); break;
+    case "retry":        if (playingCh) tune(playingCh); break;
+    case "clearFilters": clearFilters(); break;
+    case "loadDefault":  loadUrl(DEFAULT_URL); break;
+    case "closeFilter":  if (picker) closePicker(); else closeFilter(); break;
+    case "closeMenu":    closeMenu(); break;
+    case "closeRecent":  closeRecent(); break;
+  }
+}
+document.addEventListener("click", (e) => {
+  const b = e.target.closest("[data-act]");
+  if (!b) return;
+  e.preventDefault(); b.blur();
+  runAct(b.dataset.act);
+  if (b.closest("#controls")) showControls();   // keep the bar up while it's being used
+});
+
+let rafPending = false;
+els.list.addEventListener("scroll", () => {
+  // Scrolling (finger, wheel, keys) counts as using the list: restart its auto-hide countdown.
+  lastInputAt = Date.now();
+  if (mode === "list" && els.strip.classList.contains("open")) scheduleHide();
+  if (!rafPending) { rafPending = true; requestAnimationFrame(() => { rafPending = false; renderWindow(); }); }
+});
+els.strip.addEventListener("pointerdown", () => { if (mode === "list" && els.strip.classList.contains("open")) scheduleHide(); });
+window.addEventListener("resize", () => { measure(); relayoutList(); syncVideoRect(); });
+
+// App: ExoPlayer is a native view under this page — keep it on the page's
+// video box (portrait: the 16:9 area on top; landscape: the whole screen).
+function syncVideoRect() {
+  if (!NATIVE) return;
+  if (!PORTRAIT.matches) { MZNative.setVideoRect(0, 0, -1, -1); return; }
+  const r = els.video.getBoundingClientRect();
+  MZNative.setVideoRect(r.left, r.top, r.width, r.height);
+}
+
+// ---- Wiring (mouse / touch / browser) ----
+// A blank URL field loads the built-in default playlist.
+els.urlform.addEventListener("submit", (e) => { e.preventDefault(); els.url.blur(); setZone("list"); loadUrl(els.url.value.trim() || DEFAULT_URL); });
+els.load.addEventListener("click", () => { els.load.blur(); loadUrl(els.url.value.trim() || DEFAULT_URL); });
+els.file.addEventListener("change", e => { loadFile(e.target.files[0]); e.target.value = ""; });
+els.openFilter.addEventListener("click", () => { els.openFilter.blur(); if (mode === "filter") closeFilter(); else openFilter(); });
+els.welcomeClose.addEventListener("click", closeWelcome);
+["dragenter","dragover","drop"].forEach(ev => window.addEventListener(ev, e => e.preventDefault()));
+window.addEventListener("drop", e => { const f = e.dataTransfer.files[0]; if (f) loadFile(f); });
+
+// ---- Platform copy: remote buttons on TV, keyboard keys in a browser,
+// tap / hold / swipe on touch screens ----
+function applyPlatformCopy() {
+  if (TOUCH) {
+    els.guide.innerHTML = [
+      ["Tap a channel", "Play it"],                  ["Hold a channel", "Favourite & more options"],
+      ["Swipe ← → on video", "Previous / next channel"], ["Tap the video", "Show controls"],
+      [ic("more"), "Options: recent, filter, mute"], [ic("expand"), "Fullscreen"],
+    ].map(([k, d]) => "<dt><b>" + k + "</b></dt><dd>" + d + "</dd>").join("");
+    els.welcomeLead.innerHTML = "The default playlist loads by itself — just tap a channel.";
+    els.foot.innerHTML = "Hold a channel for options";
+    els.rkeys.innerHTML = ""; els.mkeys.innerHTML = "";
+    return;
+  }
+  const guide = NATIVE ? [
+    ["▲ ▼", "Browse channels"],             ["OK", "Play · hold for options"],
+    ["◀ ▶", "Previous / next channel"],     ["CH+ CH−", "Page through the list"],
+    ["MENU", "Options (or hold OK)"],        ["BACK", "Close · twice to exit"],
+    ["0–9", "Jump to channel number"],      ["▶❚❚", "Pause / play"],
+  ] : [
+    ["↑ ↓", "Browse channels"],             ["Enter", "Play · hold for options"],
+    ["← →", "Previous / next channel"],     ["PgUp PgDn", "Page through the list"],
+    ["/", "Filter & search"],               ["Esc", "Close"],
+    ["0–9", "Jump to channel number"],      ["Space", "Pause / play"],
+    ["F · R", "Favourite · Recent"],        ["I · M", "Info · Mute"],
+  ];
+  // "F · R" → two keys with a plain separator (the "·" is not a key)
+  els.guide.innerHTML = guide.map(([k, d]) => "<dt>" + k.split(" ").map(t => t === "·" ? "·" : kbd(t)).join(" ") + "</dt><dd>" + d + "</dd>").join("") +
+    (NATIVE ? '<dt><i class="dot red"></i><i class="dot green"></i><i class="dot yellow"></i><i class="dot blue"></i></dt>' +
+              '<dd style="grid-column:span 3">Favourite · Recent · Filter · Previous channel</dd>' : "");
+  els.welcomeLead.innerHTML = NATIVE
+    ? "Your last channel starts automatically. Press " + kbd("▲") + " in the list to reach the playlist URL bar."
+    : "The default playlist loads by itself. Use the keyboard below, or the mouse: click a channel, right-click for options.";
+  els.hint.innerHTML = NATIVE
+    ? "Hold " + kbd("OK") + " options · " + kbd("BACK") + " close"
+    : "Hold " + kbd("Enter") + " options · " + kbd("/") + " filter · " + kbd("R") + " recent · " + kbd("Esc") + " close";
+  els.foot.innerHTML = "Hold " + kbd(KEY.ok) + " for options";
+  els.rkeys.innerHTML = kbd(KEY.ok) + " play · " + kbd(KEY.back) + " close";
+  els.mkeys.innerHTML = kbd(KEY.back) + " close";
+}
+
+// ---- Live clock (top-right): "Mon, 10:00:10 AM" ----
+function tickClock() {
+  const n = new Date();
+  const day  = n.toLocaleDateString(undefined, { weekday:"short" });
+  const time = n.toLocaleTimeString(undefined, { hour:"numeric", minute:"2-digit", second:"2-digit", hour12:true });
+  els.clock.innerHTML = '<span class="day">' + day + '</span>, ' + time;
+}
+tickClock();
+setInterval(tickClock, 1000);
+showChrome();   // show briefly on launch, then fade
+
+// ---- Startup ----
+measure();
+setTouch(TOUCH);   // also writes the platform copy
+syncVideoRect();
+PORTRAIT.addEventListener("change", () => { measure(); relayoutList(); hideControls(); syncVideoRect(); });
+loadStore();
+buildFilterMenu();
+fsearch.value = filter.search;
+document.body.classList.add("strip-open");
+// The app always starts with channels: the saved playlist (re-downloaded,
+// so it's current), else the built-in default. Nobody has to type a URL.
+if (savedSource && savedSource.type === "url") { els.url.value = savedSource.url; loadUrl(savedSource.url, { fallback:true }); }
+else if (savedSource && savedSource.type === "text") { els.url.value = ""; ingest(savedSource.text, savedSource.name); }
+else {
+  // First run — or a big local file (browser) that can't be reopened by itself.
+  els.url.value = DEFAULT_URL;
+  loadUrl(DEFAULT_URL);
+}
+if (!seenWelcome) openWelcome();   // first-ever visit: welcome card on top
+scheduleHide();
+</script>
+</body>
+</html>
