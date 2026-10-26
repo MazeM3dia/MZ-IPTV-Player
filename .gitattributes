@@ -4,3 +4,5 @@
 *.bat text eol=crlf
 # Third-party files stay byte-identical to the verified npm releases.
 web/vendor/** -text
+# PDFs are binary: never normalise line endings.
+*.pdf binary
