@@ -12,6 +12,16 @@
   // Decide the host before first paint. Inside the Android TV app the native
   // layer injects `MZNative` and draws the video UNDER this (transparent) page.
   document.documentElement.className = window.MZNative ? "is-native" : "is-web";
+  // Flex `gap` needs Chrome 84; TV boxes stuck on Android 7–9 often have an
+  // older WebView. Flag it so the "Old WebViews" CSS can use margins instead.
+  (function () {
+    var d = document.createElement("div");
+    d.style.cssText = "display:flex;flex-direction:column;row-gap:1px;position:absolute";
+    d.appendChild(document.createElement("div")); d.appendChild(document.createElement("div"));
+    document.documentElement.appendChild(d);
+    if (d.scrollHeight !== 1) document.documentElement.className += " no-gap";
+    d.parentNode.removeChild(d);
+  })();
 </script>
 
 <!-- Inter Variable 5.1.0 (weights 100–900 in one file), bundled in vendor/
@@ -23,7 +33,8 @@
   font-style: normal;
   font-display: swap;
   font-weight: 100 900;
-  src: url(vendor/inter-latin-wght-normal.woff2) format('woff2-variations');
+  src: url(vendor/inter-latin-wght-normal.woff2) format('woff2-variations'),
+       url(vendor/inter-latin-wght-normal.woff2) format('woff2');   /* old WebViews skip the first hint */
   unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;
 }
 </style>
@@ -84,7 +95,7 @@
 
   /* ---- Reset ---- */
   *, *::before, *::after { box-sizing:border-box; }
-  html { font-size: clamp(15px, calc(min(100vh, 56.25vw) / 30), 28px); }   /* 540p→18px · 720p→24px · ≥840p→28px */
+  html { font-size:18px; font-size: clamp(15px, calc(min(100vh, 56.25vw) / 30), 28px); }   /* 540p→18px · 720p→24px · ≥840p→28px (no clamp(): measure()) */
   html { touch-action:manipulation; -webkit-tap-highlight-color:transparent; }
   html, body {
     margin:0; height:100%;
@@ -410,7 +421,7 @@
   #welcome p { margin:0 0 .8rem; font-size:.9rem; line-height:1.55; }
   #welcome p.legal { font-size:.8rem; color:var(--muted-foreground); }
   .guide {
-    display:grid; grid-template-columns:auto 1fr auto 1fr; gap:.45rem .8rem;
+    display:grid; grid-template-columns:auto 1fr auto 1fr; grid-gap:.45rem .8rem; gap:.45rem .8rem;
     align-items:center; margin:0 0 .9rem; font-size:.85rem;
   }
   .guide dt { text-align:right; }
@@ -497,6 +508,60 @@
   @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after { transition-duration:0s !important; animation-delay:0s !important; }
     .spin { animation-duration:1.6s; }
+  }
+
+  /* ---- Old WebViews (TV boxes stuck on Android 7–9) ----
+     Chrome < 79 has no min() / max() / clamp(), < 84 no flex `gap`.
+     measure() works out the root size and the --safe-x / --safe-y /
+     --strip-w tokens; the head script flags a missing flex gap with
+     html.no-gap. The rules below stand in for the rest — newer browsers
+     never match them. */
+  @supports not (width: min(1px, 2px)) {
+    #welcome .card { width:42rem; max-width:92vw; }
+    #recent .card, #menu .card { width:28rem; max-width:88vw; }
+    @media not all and (max-aspect-ratio: 1/1) {
+      #status { max-width:30rem; }
+      .strip-open #status { max-width:calc(100vw - var(--strip-w) - 2rem); }
+      #hint { max-width:26rem; }
+    }
+    @media (max-aspect-ratio: 1/1) {
+      #strip, #strip.open { padding:.75rem .75rem .5rem var(--safe-x); }
+      #filter { padding:.75rem; }
+    }
+  }
+  /* Flex gap -> margins between items (same sizes as the gap rules above).
+     Icons next to bare text get their own margin: text isn't an element. */
+  .no-gap #strip > * + * { margin-top:.6rem; }
+  .no-gap #empty > * + * { margin-top:.4rem; }
+  .no-gap #filter > * + * { margin-top:.3rem; }
+  .no-gap #fitems > * + *, .no-gap #fpick > * + * { margin-top:.15rem; }
+  .no-gap .fitem.search > * + * { margin:.4rem 0 0; }
+  .no-gap #banner .bn > * + * { margin-top:.2rem; }
+  .no-gap #status > * + * { margin-top:.5rem; }
+  .no-gap #status > .sbtns { margin-top:.7rem; }   /* gap + its own .2rem */
+  .no-gap .head > * + * { margin-left:.4rem; }
+  .no-gap .brand > .ic { margin-right:.4rem; }
+  .no-gap .hbtn > .ic { margin-right:.35rem; }
+  .no-gap .hbtn > .ic.end { margin:0 0 0 .35rem; }
+  .no-gap .channel > * + *, .no-gap .fitem > * + *, .no-gap #banner > * + *,
+  .no-gap .ritem > * + *, .no-gap .mitem > * + * { margin-left:.7rem; }
+  .no-gap #banner > .ic { margin-right:.7rem; }
+  .no-gap .channel .meta > * + *, .no-gap #banner .bn2 > * + *, .no-gap #controls > * + * { margin-left:.35rem; }
+  .no-gap #banner .bn2 > * { margin-top:.35rem; }   /* row gap when it wraps… */
+  .no-gap #banner .bn > .bn2 { margin-top:-.15rem; }  /* …less the first row's: .2rem under line 1 */
+  .no-gap .sbtns > * + * { margin-left:.5rem; }
+  .no-gap .fhead > * + *, .no-gap .mhead > * + * { margin-left:1rem; }
+  /* Outlines follow border-radius only from Chrome 94: draw the focus outline
+     (2px gap, 2px line, ring) with shadows instead of a square box */
+  .no-gap #url:focus, .no-gap .hf {
+    outline:none; box-shadow:0 0 0 2px var(--background), 0 0 0 4px var(--primary), 0 0 0 5px var(--ring);
+  }
+  .no-gap #welcomeClose.hf { box-shadow:0 0 0 2px var(--card), 0 0 0 4px var(--primary), 0 0 0 5px var(--ring); }
+  @media (max-aspect-ratio: 1/1) {
+    .no-gap #status > * + * { margin-top:.3rem; }
+    .no-gap #status > .ic + * { margin-top:0; }   /* the icon is hidden here */
+    .no-gap #status > .sbtns { margin-top:.5rem; }
+    .no-gap #controls [data-act="prev"] { margin-left:0; }   /* first visible button */
   }
 </style>
 </head>
@@ -674,9 +739,26 @@ function logoHtml(url, collapse) {
 // Row height follows the root font size so the list scales with the screen.
 // JS is the single source of truth: it writes --row-h for the CSS.
 function measure() {
-  const fs = parseFloat(getComputedStyle(document.documentElement).fontSize) || 18;
+  if (!CSS_MATH) legacySizes();
+  const fs =parseFloat(getComputedStyle(document.documentElement).fontSize) || 18;
   ROW_H = Math.round(fs * 3.2);
   document.documentElement.style.setProperty("--row-h", ROW_H + "px");
+}
+// WebViews older than Chrome 79 (TV boxes stuck on Android 7–9) have no
+// min() / max() / clamp(): the root size and the --safe-x / --safe-y /
+// --strip-w tokens built from them come out invalid and the channel list
+// loses its width. Work out the same values here (notch insets: none).
+const CSS_MATH = !!(window.CSS && CSS.supports && CSS.supports("width", "min(1px, 2px)"));
+function legacySizes() {
+  const w = innerWidth, h = innerHeight, root = document.documentElement.style;
+  const fs = Math.min(28, Math.max(15, Math.min(h, w * 0.5625) / 30));
+  const portrait = PORTRAIT.matches;
+  const sx = portrait ? 0.75 * fs : 0.05 * w, sy = portrait ? 0.75 * fs : 0.05 * h;
+  root.fontSize = fs + "px";
+  root.setProperty("--safe-x", sx + "px");
+  root.setProperty("--safe-y", sy + "px");
+  root.setProperty("--strip-w", (portrait ? w : sx + Math.min(24 * fs, 0.46 * w)) + "px");
+  if (!CSS.supports("top", "env(safe-area-inset-top)")) root.setProperty("--vid-top", "0px");   // < Chrome 69
 }
 
 // ---- Store (remembers source, favourites, filters, history) ----
@@ -773,8 +855,57 @@ function countryFromId(tvgId) {
   return /^[a-z]{2}$/.test(cc) ? cc.toUpperCase() : null;
 }
 const CC_ALIASES = { UK:"GB" };
-const regionNames = (() => { try { return new Intl.DisplayNames(["en"], { type:"region" }); } catch { return null; } })();
-function countryName(cc) { if (!cc) return "All"; const iso = CC_ALIASES[cc] || cc; try { return (regionNames && regionNames.of(iso)) || cc; } catch { return cc; } }
+const regionNames = (() => { try { return new Intl.DisplayNames(["en"], { type:"region" }); } catch (e) { return null; } })();
+// Old WebViews (Chrome < 81) have no Intl.DisplayNames: the same English
+// names, generated from Intl.DisplayNames (CLDR 47), so the banner, the
+// country filter and search by country name still get "Germany", not "DE".
+const REGION_EN =
+  "AC:Ascension Island|AD:Andorra|AE:United Arab Emirates|AF:Afghanistan|AG:Antigua & Barbuda|AI:Anguilla|" +
+  "AL:Albania|AM:Armenia|AN:Curaçao|AO:Angola|AQ:Antarctica|AR:Argentina|AS:American Samoa|AT:Austria|" +
+  "AU:Australia|AW:Aruba|AX:Åland Islands|AZ:Azerbaijan|BA:Bosnia & Herzegovina|BB:Barbados|BD:Bangladesh|" +
+  "BE:Belgium|BF:Burkina Faso|BG:Bulgaria|BH:Bahrain|BI:Burundi|BJ:Benin|BL:St. Barthélemy|BM:Bermuda|" +
+  "BN:Brunei|BO:Bolivia|BQ:Caribbean Netherlands|BR:Brazil|BS:Bahamas|BT:Bhutan|BU:Myanmar (Burma)|" +
+  "BV:Bouvet Island|BW:Botswana|BY:Belarus|BZ:Belize|CA:Canada|CC:Cocos (Keeling) Islands|" +
+  "CD:Congo - Kinshasa|CF:Central African Republic|CG:Congo - Brazzaville|CH:Switzerland|CI:Côte d’Ivoire|" +
+  "CK:Cook Islands|CL:Chile|CM:Cameroon|CN:China|CO:Colombia|CP:Clipperton Island|CQ:Sark|CR:Costa Rica|" +
+  "CS:Serbia|CU:Cuba|CV:Cape Verde|CW:Curaçao|CX:Christmas Island|CY:Cyprus|CZ:Czechia|DD:Germany|" +
+  "DE:Germany|DG:Diego Garcia|DJ:Djibouti|DK:Denmark|DM:Dominica|DO:Dominican Republic|DY:Benin|DZ:Algeria|" +
+  "EA:Ceuta & Melilla|EC:Ecuador|EE:Estonia|EG:Egypt|EH:Western Sahara|ER:Eritrea|ES:Spain|ET:Ethiopia|" +
+  "EU:European Union|EZ:Eurozone|FI:Finland|FJ:Fiji|FK:Falkland Islands|FM:Micronesia|FO:Faroe Islands|" +
+  "FR:France|FX:France|GA:Gabon|GB:United Kingdom|GD:Grenada|GE:Georgia|GF:French Guiana|GG:Guernsey|" +
+  "GH:Ghana|GI:Gibraltar|GL:Greenland|GM:Gambia|GN:Guinea|GP:Guadeloupe|GQ:Equatorial Guinea|GR:Greece|" +
+  "GS:South Georgia & South Sandwich Islands|GT:Guatemala|GU:Guam|GW:Guinea-Bissau|GY:Guyana|" +
+  "HK:Hong Kong SAR China|HM:Heard & McDonald Islands|HN:Honduras|HR:Croatia|HT:Haiti|HU:Hungary|" +
+  "HV:Burkina Faso|IC:Canary Islands|ID:Indonesia|IE:Ireland|IL:Israel|IM:Isle of Man|IN:India|" +
+  "IO:British Indian Ocean Territory|IQ:Iraq|IR:Iran|IS:Iceland|IT:Italy|JE:Jersey|JM:Jamaica|JO:Jordan|" +
+  "JP:Japan|KE:Kenya|KG:Kyrgyzstan|KH:Cambodia|KI:Kiribati|KM:Comoros|KN:St. Kitts & Nevis|KP:North Korea|" +
+  "KR:South Korea|KW:Kuwait|KY:Cayman Islands|KZ:Kazakhstan|LA:Laos|LB:Lebanon|LC:St. Lucia|" +
+  "LI:Liechtenstein|LK:Sri Lanka|LR:Liberia|LS:Lesotho|LT:Lithuania|LU:Luxembourg|LV:Latvia|LY:Libya|" +
+  "MA:Morocco|MC:Monaco|MD:Moldova|ME:Montenegro|MF:St. Martin|MG:Madagascar|MH:Marshall Islands|" +
+  "MK:North Macedonia|ML:Mali|MM:Myanmar (Burma)|MN:Mongolia|MO:Macao SAR China|MP:Northern Mariana Islands|" +
+  "MQ:Martinique|MR:Mauritania|MS:Montserrat|MT:Malta|MU:Mauritius|MV:Maldives|MW:Malawi|MX:Mexico|" +
+  "MY:Malaysia|MZ:Mozambique|NA:Namibia|NC:New Caledonia|NE:Niger|NF:Norfolk Island|NG:Nigeria|NH:Vanuatu|" +
+  "NI:Nicaragua|NL:Netherlands|NO:Norway|NP:Nepal|NR:Nauru|NU:Niue|NZ:New Zealand|OM:Oman|PA:Panama|PE:Peru|" +
+  "PF:French Polynesia|PG:Papua New Guinea|PH:Philippines|PK:Pakistan|PL:Poland|PM:St. Pierre & Miquelon|" +
+  "PN:Pitcairn Islands|PR:Puerto Rico|PS:Palestinian Territories|PT:Portugal|PW:Palau|PY:Paraguay|QA:Qatar|" +
+  "QO:Outlying Oceania|RE:Réunion|RH:Zimbabwe|RO:Romania|RS:Serbia|RU:Russia|RW:Rwanda|SA:Saudi Arabia|" +
+  "SB:Solomon Islands|SC:Seychelles|SD:Sudan|SE:Sweden|SG:Singapore|SH:St. Helena|SI:Slovenia|" +
+  "SJ:Svalbard & Jan Mayen|SK:Slovakia|SL:Sierra Leone|SM:San Marino|SN:Senegal|SO:Somalia|SR:Suriname|" +
+  "SS:South Sudan|ST:São Tomé & Príncipe|SU:Russia|SV:El Salvador|SX:Sint Maarten|SY:Syria|SZ:Eswatini|" +
+  "TA:Tristan da Cunha|TC:Turks & Caicos Islands|TD:Chad|TF:French Southern Territories|TG:Togo|TH:Thailand|" +
+  "TJ:Tajikistan|TK:Tokelau|TL:Timor-Leste|TM:Turkmenistan|TN:Tunisia|TO:Tonga|TP:Timor-Leste|TR:Türkiye|" +
+  "TT:Trinidad & Tobago|TV:Tuvalu|TW:Taiwan|TZ:Tanzania|UA:Ukraine|UG:Uganda|UK:United Kingdom|" +
+  "UM:U.S. Outlying Islands|UN:United Nations|US:United States|UY:Uruguay|UZ:Uzbekistan|VA:Vatican City|" +
+  "VC:St. Vincent & Grenadines|VD:Vietnam|VE:Venezuela|VG:British Virgin Islands|VI:U.S. Virgin Islands|" +
+  "VN:Vietnam|VU:Vanuatu|WF:Wallis & Futuna|WS:Samoa|XA:Pseudo-Accents|XB:Pseudo-Bidi|XK:Kosovo|YD:Yemen|" +
+  "YE:Yemen|YT:Mayotte|YU:Serbia|ZA:South Africa|ZM:Zambia|ZR:Congo - Kinshasa|ZW:Zimbabwe|" +
+  "ZZ:Unknown Region";
+let regionTable = null;
+function regionEn(iso) {
+  if (!regionTable) { regionTable = {}; REGION_EN.split("|").forEach((p) => { regionTable[p.slice(0, 2)] = p.slice(3); }); }
+  return regionTable[iso];
+}
+function countryName(cc) { if (!cc) return "All"; const iso = CC_ALIASES[cc] || cc; try { return (regionNames ? regionNames.of(iso) : regionEn(iso)) || cc; } catch (e) { return cc; } }
 const ccNames = {};
 const ccName = (cc) => ccNames[cc] || (ccNames[cc] = countryName(cc));
 
@@ -1044,11 +1175,12 @@ function onPlayerError(reason) {
   if (ch.geo) notes.push("The playlist marks it geo-blocked.");
   if (ch.part) notes.push("The playlist marks it as not 24/7 — it may be off-air right now.");
   if (!NATIVE && (ch.ua || ch.ref)) notes.push("It needs request headers a browser can't send — it should play in the TV app.");
+  if (!NATIVE && /\.mpd([?#]|$)/i.test(ch.url || "")) notes.push("It's a DASH stream, which this page can't play in a browser — it should play in the TV app.");
   const keys = "<small>" + kbd(KEY.left) + " " + kbd(KEY.right) + " change channel · " + kbd(KEY.ok) + " retry</small>";
   setStatus("error", ic("alert") + "<b>" + name + " is unavailable</b><span>" + esc(reason) + "</span>" +
     (notes.length ? "<small>" + esc(notes.join(" ")) + "</small>" : "") + (!useButtons() ? keys
     : '<span class="sbtns"><button class="hbtn" data-act="retry">' + ic("retry") + 'Retry</button>' +
-      '<button class="hbtn" data-act="next">Next channel' + ic("next") + "</button></span>" + (TOUCH ? "" : keys)));
+      '<button class="hbtn" data-act="next">Next channel' + ic("next", "end") + "</button></span>" + (TOUCH ? "" : keys)));
   updateControls();
 }
 function httpReason(code) {
@@ -1302,7 +1434,8 @@ function maybeRefresh() {
   // list would move under them — try again on the next check.
   if (mode !== "list" || numBuf || (isOpen() && Date.now() - lastInputAt < 60000)) return;
   refreshing = true;
-  loadUrl(savedSource.url, { refresh:true, quiet:true }).finally(() => { refreshing = false; });
+  const done = () => { refreshing = false; };
+  loadUrl(savedSource.url, { refresh:true, quiet:true }).then(done, done);   // not .finally(): old WebViews lack it
 }
 function refreshNow() {
   if (savedSource && savedSource.type === "url") loadUrl(savedSource.url, { refresh:true });

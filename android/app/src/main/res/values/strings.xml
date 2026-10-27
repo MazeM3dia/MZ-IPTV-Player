@@ -3,8 +3,9 @@
     <string name="app_name">MZ IPTV Player</string>
 
     <!-- Shown when the device's Android System WebView is too old to draw the app -->
-    <string name="webview_old_title">Update Android System WebView</string>
+    <string name="webview_old_title">Android System WebView is out of date</string>
     <string name="webview_old_message">This device\'s Android System WebView is version %1$d. MZ IPTV Player needs version %2$d or newer to display correctly.\n\nUpdate \"Android System WebView\" from the Play Store, then open the app again.</string>
+    <string name="webview_old_message_system">This device\'s Android System WebView is version %1$d. MZ IPTV Player needs version %2$d or newer to display correctly.\n\nThis WebView is part of the device firmware and can\'t be updated from the Play Store. Videos still play; only the menus may look wrong.</string>
     <string name="webview_old_update">Update</string>
     <string name="webview_old_continue">Continue anyway</string>
 </resources>

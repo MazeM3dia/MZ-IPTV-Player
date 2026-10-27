@@ -19,10 +19,10 @@ android {
 
     defaultConfig {
         applicationId = "com.mazem3dia.iptv"
-        minSdk = 21
+        minSdk = 28   // Android 9
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 2
+        versionName = "0.1.1"
     }
 
     signingConfigs {
@@ -62,6 +62,7 @@ dependencies {
     implementation("androidx.webkit:webkit:1.12.1")
     implementation("androidx.media3:media3-exoplayer:$media3")
     implementation("androidx.media3:media3-exoplayer-hls:$media3")
+    implementation("androidx.media3:media3-exoplayer-dash:$media3")   // .mpd streams
     implementation("androidx.media3:media3-ui:$media3")
 }
 

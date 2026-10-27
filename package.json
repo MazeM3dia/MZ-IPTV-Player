@@ -1,0 +1,14 @@
+{
+  "name": "mz-iptv-player",
+  "version": "0.1.1",
+  "private": true,
+  "description": "Dev tooling only: test runner scripts. The player itself has no npm dependencies.",
+  "license": "MIT",
+  "scripts": {
+    "test": "node tests/run.mjs",
+    "test:online": "node tests/run.mjs --online"
+  },
+  "devDependencies": {
+    "playwright": "1.64.1"
+  }
+}

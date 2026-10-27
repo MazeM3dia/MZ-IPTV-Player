@@ -473,20 +473,26 @@ class MainActivity : ComponentActivity() {
 
     /**
      * Cheap TV boxes often keep the WebView they shipped with. Below MIN_WEBVIEW the
-     * page can't render properly, so say so (with a way to update) instead of
-     * leaving a broken screen. The user can still carry on.
+     * page can't render properly, so say so instead of leaving a broken screen. The
+     * user can still carry on. Shown once per WebView version, and Update only when
+     * the Play Store has that WebView: many boxes use AOSP's com.android.webview,
+     * which only a firmware update can replace.
      */
     private fun checkWebViewVersion() {
         val pkg = WebViewCompat.getCurrentWebViewPackage(this) ?: return
         val major = pkg.versionName?.substringBefore('.')?.toIntOrNull() ?: return
         if (major >= MIN_WEBVIEW) return
         Log.w(TAG, "WebView ${pkg.packageName} $major is older than $MIN_WEBVIEW")
-        AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
+        val prefs = getPreferences(MODE_PRIVATE)
+        if (prefs.getInt(PREF_WEBVIEW_WARNED, 0) == major) return
+        prefs.edit().putInt(PREF_WEBVIEW_WARNED, major).apply()
+        val onPlay = PLAY_WEBVIEWS.any { pkg.packageName.startsWith(it) }
+        val dialog = AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
             .setTitle(R.string.webview_old_title)
-            .setMessage(getString(R.string.webview_old_message, major, MIN_WEBVIEW))
-            .setPositiveButton(R.string.webview_old_update) { _, _ -> openStorePage(pkg.packageName) }
+            .setMessage(getString(if (onPlay) R.string.webview_old_message else R.string.webview_old_message_system, major, MIN_WEBVIEW))
             .setNegativeButton(R.string.webview_old_continue, null)
-            .show()
+        if (onPlay) dialog.setPositiveButton(R.string.webview_old_update) { _, _ -> openStorePage(pkg.packageName) }
+        dialog.show()
     }
 
     private fun openStorePage(packageName: String) {
@@ -577,7 +583,12 @@ class MainActivity : ComponentActivity() {
         private val SELECT_KEYS = setOf(
             KeyEvent.KEYCODE_BUTTON_A, KeyEvent.KEYCODE_BUTTON_SELECT, KeyEvent.KEYCODE_NUMPAD_ENTER,
         )
-        // Oldest WebView that renders the page correctly (flex gap, clamp(), min()).
-        private const val MIN_WEBVIEW = 84
+        // Oldest WebView that renders the page correctly. Flex gap (84) and min() /
+        // clamp() (79) have fallbacks in the page; what's left: async/await (55),
+        // scrollIntoView options (61), variable fonts (62).
+        private const val MIN_WEBVIEW = 62
+        private const val PREF_WEBVIEW_WARNED = "webviewWarnedFor"
+        // WebView providers the Play Store can update (stable / beta / dev / canary)
+        private val PLAY_WEBVIEWS = listOf("com.google.android.webview", "com.android.chrome", "com.chrome.")
     }
 }

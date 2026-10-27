@@ -1,5 +1,7 @@
 # Test output (screenshots, logs, Chrome profiles, downloaded playlist)
 tests/out/
+# Dev tooling (Playwright for the optional cross-browser suite)
+node_modules/
 
 # Icon generator temp files
 art/build-*

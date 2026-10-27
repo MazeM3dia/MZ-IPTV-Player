@@ -14,6 +14,8 @@ A live TV player for **Android TV, phones, tablets and the browser**. Load an M3
 - **Find things fast.** Search by name, country or genre. Filter by country, category or favourites, or jump to a channel by number.
 - **Favourites and history.** They follow the channel itself, not its stream link, so they survive playlist updates.
 - **Phone-friendly.** In portrait, the video sits on top with the list below; in landscape, the video is full screen with a see-through list. Swipe on the video to change channel, hold a channel for options.
+- **Plays the common IPTV formats.** HLS, DASH and plain HTTP streams (TS, MP4) in the app, with hardware video decoding.
+- **Runs on older TV boxes too.** Works on Android 9 boxes with the WebView they shipped with, which is often years out of date.
 - **Clear errors.** When a channel can't play you get the reason (geo-restricted, offline, needs a login, unsupported format) with Retry and Next buttons.
 - **Private and self-contained.** No accounts, no tracking, no ads, nothing loaded from CDNs. The only network traffic is the playlist, the streams and channel logos.
 - **Accessible.** Text and focus outlines meet WCAG AA contrast, checked automatically over both dark and bright video.
@@ -35,7 +37,7 @@ A live TV player for **Android TV, phones, tablets and the browser**. Load an M3
 ## Install
 
 ### Android (phone, tablet, Android TV)
-Requires Android 5.0 or newer, with Android System WebView 84 or newer (2020). If a TV box's WebView is older, the app says so and links to the update.
+Requires Android 9 or newer. The menus work with the Android System WebView that Android 9 ships with (version 66) and anything newer; if a device's WebView is older than 62, the app says so once (with a Play Store link when the WebView can be updated there). Plays HLS, DASH and plain HTTP (TS / MP4) streams.
 
 1. Download the APK from this repository's **Releases** page, or [build it yourself](#build-from-source).
 2. **Phone or tablet:** open the APK and allow *Install unknown apps* for the app you opened it from (Files, Chrome, …). If Google Play Protect warns that the app is unknown, tap *More details → Install anyway*.
@@ -44,7 +46,7 @@ Requires Android 5.0 or newer, with Android System WebView 84 or newer (2020). I
 Installing a newer APK over an existing one updates it and keeps your favourites and settings.
 
 ### Browser
-Open `web/index.html` in a modern browser (developed and tested in Chrome) on a desktop, phone or tablet. You can open it straight from disk or serve the `web/` folder from any web server. Keep `web/vendor/` and `web/icons/` next to `index.html`.
+Open `web/index.html` in a modern browser on a desktop, phone or tablet. Tested in Chrome, Edge and Firefox (including playback), and in WebKit, Safari's engine (layout and controls). Browsers play HLS and MP4 / WebM; DASH streams and streams that need special request headers only play in the Android app. You can open it straight from disk or serve the `web/` folder from any web server. Keep `web/vendor/` and `web/icons/` next to `index.html`.
 
 ## How to use
 
@@ -115,6 +117,8 @@ With a mouse: click a channel to play it, right-click for options, move the mous
 | *Unsupported or broken stream format* / *can't decode* | The stream uses a format this device can't play |
 | Brief *Buffering…* | The stream's server or the route to it is slow. Far-away servers buffer more |
 
+Copy-protected (DRM) channels, mostly DASH streams from paid services, can't play: the player doesn't support DRM.
+
 Browser only: some channels also fail because browsers block cross-site video (CORS) or `http://` streams on an `https://` page, and some streams need request headers a browser can't send. The Android app has none of these limits, so those channels usually play there.
 
 ## How it works
@@ -124,7 +128,7 @@ The player is a **hybrid app**: one web page for the interface, with native Andr
 ┌──────────────────────────────────────────────┐
 │  WebView (transparent)  ← web/index.html     │  channel list, menus, focus, search
 ├──────────────────────────────────────────────┤
-│  ExoPlayer (Media3)     ← native video       │  HLS / TS playback, hardware decoding
+│  ExoPlayer (Media3)     ← native video       │  HLS / DASH / TS playback, hardware decoding
 └──────────────────────────────────────────────┘
 ```
 
@@ -146,7 +150,7 @@ The player is a **hybrid app**: one web page for the interface, with native Andr
 1. **File → Open** the `android/` folder (not the repository root).
 2. Wait for Gradle sync. The first time, it downloads Gradle 8.11.1 and the libraries.
 3. Pick a device and press **▶ Run**:
-   - **TV emulator:** Device Manager → + → TV → *Television (1080p)*, Android TV image;
+   - **TV emulator:** Device Manager → + → TV → *Television (1080p)*, Android TV image. To check old TV boxes, use the *Pie (API 28)* Android TV image: it ships WebView 66, which exercises the page's fallbacks;
    - **Phone emulator;**
    - **Real device:** turn on USB debugging.
 
@@ -185,15 +189,23 @@ The version is set in `android/app/build.gradle.kts` (`versionName`, plus `versi
 | `web/icons/` | Browser tab and home-screen icons (generated) |
 | `android/` | The Android app: `MainActivity.kt` (WebView + ExoPlayer + bridge), manifest, resources |
 | `art/` | Icon source (`icon.jpg`) and `make-icons.py`, which generates every launcher icon, the TV banner, browser icons and Play Store graphics (`art/store/`) |
-| `tests/` | Automated checks in headless Chrome |
+| `tests/` | Automated checks in headless Chrome, plus Firefox and WebKit through Playwright |
+| `package.json` | Dev tooling only (test scripts, Playwright). The player itself has no npm dependencies |
 
 ### Tests
-Needs Node 22+ and Chrome. Set `CHROME=<path to chrome>` if Chrome isn't in the default place.
+Needs Node 22+ and Chrome. Set `CHROME=<path to chrome>` if Chrome isn't in the default place (Edge works too).
 
 ```bash
-node tests/run.mjs            # offline suites, ~1.5 min
+node tests/run.mjs            # offline suites, ~2 min
 node tests/run.mjs --online   # + real iptv-org playlist and real playback (needs internet)
 node tests/run.mjs contrast   # only suites whose name matches
+```
+
+The `cross-browser` suite is optional. Without Playwright it's reported as SKIP. To enable it (downloads Firefox and WebKit, a few hundred MB, once):
+
+```bash
+npm install
+npx playwright install firefox webkit
 ```
 
 | Suite | Checks |
@@ -203,6 +215,7 @@ node tests/run.mjs contrast   # only suites whose name matches
 | `screens` | 5 screen sizes with touch: layout, tap / swipe / long-press, no horizontal scroll |
 | `network` | Nothing loads from a CDN; font and icons are local |
 | `contrast` | WCAG text contrast and focus outlines in every main state, over dark and bright video |
+| `cross-browser` | Firefox and WebKit on TV, desktop and phone sizes: layout, keyboard / touch, search, menus, cards. With `--online`, real HLS playback (skipped in WebKit builds without media support, such as Playwright's Windows build) |
 | `online-playlist` | The real playlist parses (resolutions, geo tags, headers) and search works |
 | `online-playback` | The default playlist downloads and a real channel plays |
 

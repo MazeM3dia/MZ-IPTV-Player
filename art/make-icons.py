@@ -2,7 +2,7 @@
 
     python art/make-icons.py
 
-  android/app/src/main/res/   launcher icons (adaptive, themed, legacy) + TV banner
+  android/app/src/main/res/   launcher icons (adaptive + themed) + TV banner
   web/icons/                  browser tab icon + home-screen icons
   art/store/                  Play Store graphics (not packaged in the app)
 
@@ -103,7 +103,7 @@ def adaptive_xml():
     <monochrome android:drawable="@mipmap/ic_launcher_monochrome" />
 </adaptive-icon>
 """
-    d = os.path.join(RES, "mipmap-anydpi-v26")
+    d = os.path.join(RES, "mipmap-anydpi")
     os.makedirs(d, exist_ok=True)
     for name in ("ic_launcher.xml", "ic_launcher_round.xml"):
         with open(os.path.join(d, name), "w", encoding="utf-8", newline="\n") as f:
@@ -179,8 +179,7 @@ def main():
         layer = round(108 * k)
         write(master.resize((layer, layer), Image.LANCZOS), "mipmap-" + folder, "ic_launcher_foreground.png")
         write(mono.resize((layer, layer), Image.LANCZOS), "mipmap-" + folder, "ic_launcher_monochrome.png")
-        write(legacy(master, round(48 * k), False), "mipmap-" + folder, "ic_launcher.png")
-        write(legacy(master, round(48 * k), True), "mipmap-" + folder, "ic_launcher_round.png")
+        # No legacy ic_launcher*.png: minSdk 28, every device uses the adaptive icon
     adaptive_xml()
     colors_xml(bg)
     web_icons(master)
