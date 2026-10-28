@@ -1,6 +1,6 @@
 {
   "name": "mz-iptv-player",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "description": "Dev tooling only: test runner scripts. The player itself has no npm dependencies.",
   "license": "MIT",

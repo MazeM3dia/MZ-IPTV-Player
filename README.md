@@ -67,7 +67,7 @@ Open `web/index.html` in a modern browser on a desktop, phone or tablet. Tested 
 
 **Everything works with just the D-pad, OK and BACK**, so minimal remotes are fully supported: Google TV / Chromecast remotes have no MENU, CH±, number or colour keys. **Game controllers** work too: A = OK (hold for options), B = Back, L1 / R1 = previous / next channel, Start = play / pause.
 
-The list slides away on its own after 8 seconds without input.
+The list slides away on its own after 8 seconds without input while a channel plays. With nothing playing (for example, no internet at start) it stays open.
 
 ### Touch (phone and tablet)
 | Gesture | Action |

@@ -510,8 +510,9 @@
     .spin { animation-duration:1.6s; }
   }
 
-  /* ---- Old WebViews (TV boxes stuck on Android 7–9) ----
-     Chrome < 79 has no min() / max() / clamp(), < 84 no flex `gap`.
+  /* ---- Old WebViews (TV boxes and TVs that keep their factory WebView) ----
+     Chrome < 79 has no min() / max() / clamp(), < 84 no flex `gap`,
+     < 94 square outlines on rounded buttons.
      measure() works out the root size and the --safe-x / --safe-y /
      --strip-w tokens; the head script flags a missing flex gap with
      html.no-gap. The rules below stand in for the rest — newer browsers
@@ -551,12 +552,15 @@
   .no-gap #banner .bn > .bn2 { margin-top:-.15rem; }  /* …less the first row's: .2rem under line 1 */
   .no-gap .sbtns > * + * { margin-left:.5rem; }
   .no-gap .fhead > * + *, .no-gap .mhead > * + * { margin-left:1rem; }
-  /* Outlines follow border-radius only from Chrome 94: draw the focus outline
-     (2px gap, 2px line, ring) with shadows instead of a square box */
-  .no-gap #url:focus, .no-gap .hf {
-    outline:none; box-shadow:0 0 0 2px var(--background), 0 0 0 4px var(--primary), 0 0 0 5px var(--ring);
+  /* Outlines follow border-radius only from Chrome 94 (e.g. Android 11 TV ships
+     WebView 90): draw the focus outline (2px gap, 2px line, ring) with shadows
+     instead of a square box. scrollbar-gutter arrived in the same release. */
+  @supports not (scrollbar-gutter: stable) {
+    #url:focus, .hf {
+      outline:none; box-shadow:0 0 0 2px var(--background), 0 0 0 4px var(--primary), 0 0 0 5px var(--ring);
+    }
+    #welcomeClose.hf { box-shadow:0 0 0 2px var(--card), 0 0 0 4px var(--primary), 0 0 0 5px var(--ring); }
   }
-  .no-gap #welcomeClose.hf { box-shadow:0 0 0 2px var(--card), 0 0 0 4px var(--primary), 0 0 0 5px var(--ring); }
   @media (max-aspect-ratio: 1/1) {
     .no-gap #status > * + * { margin-top:.3rem; }
     .no-gap #status > .ic + * { margin-top:0; }   /* the icon is hidden here */
@@ -792,7 +796,9 @@ function saveStore() {
 }
 
 // ---- Strip + auto-hide ----
-// Remote / keyboard / mouse: the list slides away after 8 s without input.
+// Remote / keyboard / mouse: the list slides away after 8 s without input,
+// but only once a channel is on — with nothing playing (no internet at start,
+// empty playlist) hiding it would leave a black screen with no way forward.
 // Touch screens: no timer (a slow finger-scroll isn't "input" to it) — the
 // list closes on picking a channel, tapping the video, or Back.
 const STRIP_HIDE = 8000;
@@ -802,7 +808,7 @@ const typing = () => document.activeElement === els.url || document.activeElemen
 function scheduleHide() {
   clearTimeout(hideTimer); hideTimer = null;
   if (TOUCH) return;
-  hideTimer = setTimeout(() => { if (mode === "list" && zone === "list" && !typing()) hideStrip(); }, STRIP_HIDE);
+  hideTimer = setTimeout(() => { if (mode === "list" && zone === "list" && !typing() && playingUrl) hideStrip(); }, STRIP_HIDE);
 }
 function showStrip() { els.strip.classList.add("open"); document.body.classList.add("strip-open"); scheduleHide(); }
 function hideStrip() {

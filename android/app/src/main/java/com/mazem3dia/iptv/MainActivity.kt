@@ -468,6 +468,7 @@ class MainActivity : ComponentActivity() {
     override fun onDestroy() {
         super.onDestroy()
         player.release()
+        (webView.parent as? ViewGroup)?.removeView(webView)   // destroy() wants it detached first
         webView.destroy()
     }
 
